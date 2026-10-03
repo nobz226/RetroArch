@@ -29,6 +29,7 @@
 #include <exynos/exynos_fimg2d.h>
 
 #include <retro_inline.h>
+#include <compat/strl.h>
 #include <string/stdstring.h>
 
 #ifdef HAVE_CONFIG_H
@@ -41,6 +42,7 @@
 
 #include "../common/drm_common.h"
 #include "../font_driver.h"
+#include "../../verbosity.h"
 #include "../../configuration.h"
 #include "../../retroarch.h"
 
@@ -70,21 +72,21 @@ enum exynos_buffer_type
 enum exynos_image_type
 {
   EXYNOS_IMAGE_FRAME = 0,
-  EXYNOS_IMAGE_FRONT,
+  EXYNOS_IMAGE_FONT,
   EXYNOS_IMAGE_MENU,
   EXYNOS_IMAGE_COUNT
 };
 
 static const struct exynos_config_default
 {
-   unsigned width, height;
+   unsigned dims;
    enum exynos_buffer_type buf_type;
    unsigned g2d_color_mode;
    unsigned bpp; /* bytes per pixel */
 } defaults[EXYNOS_IMAGE_COUNT] = {
-   {1024, 640, EXYNOS_BUFFER_MAIN, G2D_COLOR_FMT_RGB565   | G2D_ORDER_AXRGB, 2}, /* frame */
-   {720,  368, EXYNOS_BUFFER_AUX,  G2D_COLOR_FMT_ARGB4444 | G2D_ORDER_AXRGB, 2}, /* font */
-   {400,  240, EXYNOS_BUFFER_AUX,  G2D_COLOR_FMT_ARGB4444 | G2D_ORDER_RGBAX, 2}  /* menu */
+   {VIDEO_SCALE_PACK(1024, 640), EXYNOS_BUFFER_MAIN, G2D_COLOR_FMT_RGB565   | G2D_ORDER_AXRGB, 2}, /* frame */
+   {VIDEO_SCALE_PACK(720, 368), EXYNOS_BUFFER_AUX,  G2D_COLOR_FMT_ARGB4444 | G2D_ORDER_AXRGB, 2}, /* font */
+   {VIDEO_SCALE_PACK(400, 240), EXYNOS_BUFFER_AUX,  G2D_COLOR_FMT_ARGB4444 | G2D_ORDER_RGBAX, 2}  /* menu */
 };
 
 struct exynos_data;
@@ -133,8 +135,8 @@ struct exynos_data
 
   unsigned pageflip_pending;
 
-  /* framebuffer dimensions */
-  unsigned width, height;
+  /* framebuffer dimensions, VIDEO_SCALE_PACK's layout */
+  unsigned dims;
 
   /* framebuffer aspect ratio */
   float aspect;
@@ -359,7 +361,7 @@ static void exynos_put_glyph_rgba4444(struct exynos_data *pdata,
       unsigned g_pitch, unsigned dst_x, unsigned dst_y)
 {
    unsigned x, y;
-   const enum exynos_image_type buf_type = defaults[EXYNOS_IMAGE_FONT].buf_type;
+   const enum exynos_buffer_type buf_type = defaults[EXYNOS_IMAGE_FONT].buf_type;
    const              unsigned buf_width = pdata->src[EXYNOS_IMAGE_FONT]->width;
    uint16_t            *__restrict__ dst = (uint16_t*)pdata->buf[buf_type]->vaddr +
       dst_y * buf_width + dst_x;
@@ -448,22 +450,23 @@ static int exynos_g2d_init(struct exynos_data *pdata)
    dst->buf_type   = G2D_IMGBUF_GEM;
    dst->color_mode = (pdata->bpp == 2) ? G2D_COLOR_FMT_RGB565 | G2D_ORDER_AXRGB :
       G2D_COLOR_FMT_ARGB8888 | G2D_ORDER_AXRGB;
-   dst->width      = pdata->width;
-   dst->height     = pdata->height;
+   dst->width      = VIDEO_SCALE_W(pdata->dims);
+   dst->height     = VIDEO_SCALE_H(pdata->dims);
    dst->stride     = pdata->pitch;
    dst->color      = 0xff000000; /* Clear color for solid fill operation. */
 
    for (i = 0; i < EXYNOS_IMAGE_COUNT; ++i)
    {
       const enum exynos_buffer_type buf_type = defaults[i].buf_type;
-      const unsigned buf_size = defaults[i].width * defaults[i].height * defaults[i].bpp;
+      const unsigned buf_size = VIDEO_SCALE_W(defaults[i].dims)
+         * VIDEO_SCALE_H(defaults[i].dims) * defaults[i].bpp;
       struct g2d_image *src   = (struct g2d_image*)calloc(1, sizeof(struct g2d_image));
       if (!src)
          break;
 
-      src->width       = defaults[i].width;
-      src->height      = defaults[i].height;
-      src->stride      = defaults[i].width * defaults[i].bpp;
+      src->width       = VIDEO_SCALE_W(defaults[i].dims);
+      src->height      = VIDEO_SCALE_H(defaults[i].dims);
+      src->stride      = src->width * defaults[i].bpp;
 
       src->color_mode  = defaults[i].g2d_color_mode;
 
@@ -525,6 +528,7 @@ static int exynos_open(struct exynos_data *pdata)
    int fd                                 = -1;
    char buf[32]                           = {0};
    int devidx                             = exynos_get_device_index();
+   settings_t *settings                   = config_get_ptr();
 
    if (pdata)
       g_drm_fd                            = -1;
@@ -548,7 +552,7 @@ static int exynos_open(struct exynos_data *pdata)
    if (!drm_get_resources(fd))
       goto fail;
 
-   if (!drm_get_decoder(fd))
+   if (!drm_get_connector(fd, settings->uints.video_monitor_index))
       goto fail;
 
    if (!drm_get_encoder(fd))
@@ -560,7 +564,7 @@ static int exynos_open(struct exynos_data *pdata)
    g_drm_evctx.version                  = DRM_EVENT_CONTEXT_VERSION;
    g_drm_evctx.page_flip_handler        = exynos_page_flip_handler;
 
-   strncpy(pdata->drmname, buf, sizeof(buf));
+   strlcpy(pdata->drmname, buf, sizeof(pdata->drmname));
    g_drm_fd = fd;
 
    RARCH_LOG("[Exynos] using DRM device \"%s\" with connector id %u.\n",
@@ -585,7 +589,7 @@ static void exynos_close(struct exynos_data *pdata)
    g_drm_fd   = -1;
 }
 
-static int exynos_init(struct exynos_data *pdata, unsigned bpp)
+static int exynos_data_init(struct exynos_data *pdata, unsigned bpp)
 {
    unsigned i;
    settings_t *settings        = config_get_ptr();
@@ -595,7 +599,7 @@ static int exynos_init(struct exynos_data *pdata, unsigned bpp)
    if (  video_fullscreen_x != 0 &&
          video_fullscreen_y != 0)
    {
-      for (i = 0; i < g_drm_connector->count_modes; i++)
+      for (i = 0; i < (unsigned)g_drm_connector->count_modes; i++)
       {
          if (g_drm_connector->modes[i].hdisplay   == video_fullscreen_x &&
                g_drm_connector->modes[i].vdisplay == video_fullscreen_y)
@@ -629,8 +633,8 @@ static int exynos_init(struct exynos_data *pdata, unsigned bpp)
 
    drm_setup(g_drm_fd);
 
-   pdata->width      = g_drm_mode->hdisplay;
-   pdata->height     = g_drm_mode->vdisplay;
+   pdata->dims       = VIDEO_SCALE_PACK(g_drm_mode->hdisplay,
+         g_drm_mode->vdisplay);
 
    pdata->aspect = (float)g_drm_mode->hdisplay / (float)g_drm_mode->vdisplay;
 
@@ -638,11 +642,12 @@ static int exynos_init(struct exynos_data *pdata, unsigned bpp)
    pdata->num_pages  = 3;
 
    pdata->bpp        = bpp;
-   pdata->pitch      = bpp * pdata->width;
-   pdata->size       = pdata->pitch * pdata->height;
+   pdata->pitch      = bpp * VIDEO_SCALE_W(pdata->dims);
+   pdata->size       = pdata->pitch * VIDEO_SCALE_H(pdata->dims);
 
    RARCH_LOG("[Exynos] Selected %ux%u resolution with %u bpp.\n",
-         pdata->width, pdata->height, pdata->bpp);
+         VIDEO_SCALE_W(pdata->dims), VIDEO_SCALE_H(pdata->dims),
+         pdata->bpp);
 
    return 0;
 
@@ -654,14 +659,13 @@ fail:
    return -1;
 }
 
-/* Counterpart to exynos_init. */
+/* Counterpart to exynos_data_init. */
 static void exynos_deinit(struct exynos_data *pdata)
 {
    drm_restore_crtc();
 
    g_drm_mode       = NULL;
-   pdata->width     = 0;
-   pdata->height    = 0;
+   pdata->dims      = 0;
    pdata->num_pages = 0;
    pdata->bpp       = 0;
    pdata->pitch     = 0;
@@ -695,7 +699,8 @@ static int exynos_alloc(struct exynos_data *pdata)
 
    for (i = 0; i < EXYNOS_BUFFER_COUNT; ++i)
    {
-      const unsigned buffer_size = defaults[i].width * defaults[i].height * defaults[i].bpp;
+      const unsigned buffer_size = VIDEO_SCALE_W(defaults[i].dims)
+         * VIDEO_SCALE_H(defaults[i].dims) * defaults[i].bpp;
 
       bo = exynos_create_mapped_buffer(device, buffer_size);
       if (!bo)
@@ -741,7 +746,8 @@ static int exynos_alloc(struct exynos_data *pdata)
    {
       handles[0] = pages[i].bo->handle;
 
-      if (drmModeAddFB2(g_drm_fd, pdata->width, pdata->height,
+      if (drmModeAddFB2(g_drm_fd, VIDEO_SCALE_W(pdata->dims),
+               VIDEO_SCALE_H(pdata->dims),
                pixel_format, handles, pitches, offsets,
                &pages[i].buf_id, flags))
       {
@@ -753,7 +759,7 @@ static int exynos_alloc(struct exynos_data *pdata)
    /* Setup CRTC: display the last allocated page. */
    if (drmModeSetCrtc(g_drm_fd, g_crtc_id,
             pages[pdata->num_pages - 1].buf_id,
-            0, 0, &g_drm_connector_id, 1, g_drm_mode))
+            0, 0, &g_connector_id, 1, g_drm_mode))
    {
       RARCH_ERR("[Exynos] Initial CRTC setup failed.\n");
       goto fail;
@@ -774,7 +780,7 @@ fail_alloc:
 }
 
 /* Counterpart to exynos_alloc. */
-static void exynos_free(struct exynos_data *pdata)
+static void exynos_data_free(struct exynos_data *pdata)
 {
    unsigned i;
 
@@ -849,6 +855,8 @@ static void exynos_setup_scale(struct exynos_data *pdata,
    unsigned i;
    unsigned w, h;
    struct g2d_image *src = pdata->src[EXYNOS_IMAGE_FRAME];
+   const unsigned pw     = VIDEO_SCALE_W(pdata->dims);
+   const unsigned ph     = VIDEO_SCALE_H(pdata->dims);
    const float aspect = (float)width / (float)height;
 
    src->width      = width;
@@ -859,25 +867,25 @@ static void exynos_setup_scale(struct exynos_data *pdata,
 
    if (fabsf(pdata->aspect - aspect) < 0.0001f)
    {
-      w = pdata->width;
-      h = pdata->height;
+      w = pw;
+      h = ph;
    }
    else
    {
       if (pdata->aspect > aspect)
       {
-         w = (float)pdata->width * aspect / pdata->aspect;
-         h = pdata->height;
+         w = (float)pw * aspect / pdata->aspect;
+         h = ph;
       }
       else
       {
-         w = pdata->width;
-         h = (float)pdata->height * pdata->aspect / aspect;
+         w = pw;
+         h = (float)ph * pdata->aspect / aspect;
       }
    }
 
-   pdata->blit_params[0] = (pdata->width - w) / 2;
-   pdata->blit_params[1] = (pdata->height - h) / 2;
+   pdata->blit_params[0] = (pw - w) / 2;
+   pdata->blit_params[1] = (ph - h) / 2;
    pdata->blit_params[2] = w;
    pdata->blit_params[3] = h;
    pdata->blit_params[4] = width;
@@ -893,8 +901,8 @@ static void exynos_set_fake_blit(struct exynos_data *pdata)
 
    pdata->blit_params[0] = 0;
    pdata->blit_params[1] = 0;
-   pdata->blit_params[2] = pdata->width;
-   pdata->blit_params[3] = pdata->height;
+   pdata->blit_params[2] = VIDEO_SCALE_W(pdata->dims);
+   pdata->blit_params[3] = VIDEO_SCALE_H(pdata->dims);
 
    for (i = 0; i < pdata->num_pages; ++i)
       pdata->pages[i].clear = true;
@@ -981,7 +989,8 @@ static int exynos_blend_font(struct exynos_data *pdata)
 #endif
 
    if (g2d_scale_and_blend(pdata->g2d, src, pdata->dst, 0, 0, src->width,
-            src->height, 0, 0, pdata->width, pdata->height,
+            src->height, 0, 0, VIDEO_SCALE_W(pdata->dims),
+            VIDEO_SCALE_H(pdata->dims),
             G2D_OP_INTERPOLATE) ||
          g2d_exec(pdata->g2d))
    {
@@ -1031,9 +1040,8 @@ struct exynos_video
 
    unsigned bytes_per_pixel;
 
-   /* current dimensions of the core fb */
-   unsigned width;
-   unsigned height;
+   /* current dimensions of the core fb, VIDEO_SCALE_PACK's layout */
+   unsigned dims;
 
    /* menu data */
    unsigned menu_rotation;
@@ -1046,12 +1054,12 @@ static int exynos_init_font(struct exynos_video *vid)
 {
    struct exynos_data *pdata = vid->data;
    struct g2d_image *src     = pdata->src[EXYNOS_IMAGE_FONT];
-   const unsigned buf_height = defaults[EXYNOS_IMAGE_FONT].height;
+   const unsigned buf_height = VIDEO_SCALE_H(defaults[EXYNOS_IMAGE_FONT].dims);
    const unsigned buf_width  = align_common(pdata->aspect * (float)buf_height, 16);
    const unsigned buf_bpp    = defaults[EXYNOS_IMAGE_FONT].bpp;
    settings_t *settings      = config_get_ptr();
    bool video_font_enable    = settings->bools.video_font_enable;
-   const char *font_path     = settings->video.font_path;
+   const char *font_path     = settings->paths.path_font;
    float video_font_size     = settings->floats.video_font_size;
    float video_msg_color_r   = settings->floats.video_msg_color_r;
    float video_msg_color_g   = settings->floats.video_msg_color_g;
@@ -1062,7 +1070,7 @@ static int exynos_init_font(struct exynos_video *vid)
 
    if (font_renderer_create_default(&vid->font_driver, &vid->font,
             *font_path ? font_path : NULL,
-            video_font_size))
+            video_font_size, FONT_ATLAS_FORMAT_A8))
    {
       const int r = video_msg_color_r * 15;
       const int g = video_msg_color_g * 15;
@@ -1115,16 +1123,16 @@ static int exynos_render_msg(struct exynos_video *vid,
    {
       int base_x, base_y;
       int glyph_width, glyph_height;
+      int max_width, max_height;
       const uint8_t *src = NULL;
       const struct font_glyph *glyph = vid->font_driver->get_glyph(vid->font, (uint8_t)*msg);
       if (!glyph)
          continue;
 
-      base_x = msg_base_x + glyph->draw_offset_x;
-      base_y = msg_base_y + glyph->draw_offset_y;
-
-      const int max_width  = dst->width - base_x;
-      const int max_height = dst->height - base_y;
+      base_x       = msg_base_x + glyph->draw_offset_x;
+      base_y       = msg_base_y + glyph->draw_offset_y;
+      max_width    = dst->width - base_x;
+      max_height   = dst->height - base_y;
 
       glyph_width  = glyph->width;
       glyph_height = glyph->height;
@@ -1186,7 +1194,7 @@ static void *exynos_init(const video_info_t *video,
       goto fail;
    }
 
-   if (exynos_init(vid->data, fb_bpp) != 0)
+   if (exynos_data_init(vid->data, fb_bpp) != 0)
    {
       RARCH_ERR("[Exynos] Initialization failed.\n");
       goto fail_init;
@@ -1227,7 +1235,7 @@ fail_font:
    exynos_g2d_free(vid->data);
 
 fail_g2d:
-   exynos_free(vid->data);
+   exynos_data_free(vid->data);
 
 fail_alloc:
    exynos_deinit(vid->data);
@@ -1259,7 +1267,7 @@ static void exynos_free(void *data)
    while (exynos_pages_used(pdata->pages, pdata->num_pages) > 1)
       drm_wait_flip(-1);
 
-   exynos_free(pdata);
+   exynos_data_free(pdata);
    exynos_deinit(pdata);
    exynos_close(pdata);
 
@@ -1290,18 +1298,18 @@ static bool exynos_frame(void *data, const void *frame, unsigned width,
 
    if (frame)
    {
-      if (width != vid->width || height != vid->height)
+      if (vid->dims != VIDEO_SCALE_PACK(width, height))
       {
          /* Sanity check on new dimension parameters. */
          if (width == 0 || height == 0)
             return true;
 
          RARCH_LOG("[Exynos] Resolution changed by core: %ux%u -> %ux%u.\n",
-               vid->width, vid->height, width, height);
+               VIDEO_SCALE_W(vid->dims), VIDEO_SCALE_H(vid->dims),
+               width, height);
          exynos_setup_scale(vid->data, width, height, vid->bytes_per_pixel);
 
-         vid->width = width;
-         vid->height = height;
+         vid->dims   = VIDEO_SCALE_PACK(width, height);
       }
 
       page = exynos_free_page(vid->data);
@@ -1312,7 +1320,8 @@ static bool exynos_frame(void *data, const void *frame, unsigned width,
 
    /* If at this point the dimension parameters are still zero, setup some  *
     * fake blit parameters so that menu and font rendering work properly.   */
-   if (vid->width == 0 || vid->height == 0)
+   if (     VIDEO_SCALE_W(vid->dims) == 0
+         || VIDEO_SCALE_H(vid->dims) == 0)
       exynos_set_fake_blit(vid->data);
 
    if (!page)
@@ -1333,7 +1342,7 @@ static bool exynos_frame(void *data, const void *frame, unsigned width,
          (struct font_params*)&video_info->osd_stat_params : NULL;
 
       if (osd_params)
-         font_driver_render_msg(vid, video_info->stat_text,
+         font_driver_render_msg(vid, video_info->stat_text, video_info->stat_text_len,
                (const struct font_params*)&video_info->osd_stat_params, NULL);
    }
 
@@ -1386,10 +1395,9 @@ static void exynos_viewport_info(void *data, struct video_viewport *vp)
    if (!vid)
       return;
 
-   vp->x = vp->y = 0;
+   vp->pos = VIDEO_POS_PACK(0, 0);
 
-   vp->width  = vp->full_width  = vid->width;
-   vp->height = vp->full_height = vid->height;
+   vp->dims   = vp->full_dims   = vid->dims;
 }
 
 static void exynos_set_aspect_ratio(void *data, unsigned aspect_ratio_idx)
@@ -1408,20 +1416,20 @@ static void exynos_apply_state_changes(void *data)
 }
 
 static void exynos_set_texture_frame(void *data, const void *frame, bool rgb32,
-      unsigned width, unsigned height, float alpha)
+      unsigned dims, float alpha)
 {
    const enum exynos_buffer_type buf_type = defaults[EXYNOS_IMAGE_MENU].buf_type;
    struct exynos_video *vid = data;
    struct exynos_data *pdata = vid->data;
    struct g2d_image *src = pdata->src[EXYNOS_IMAGE_MENU];
-   const unsigned size = width * height * (rgb32 ? 4 : 2);
+   const unsigned size = VIDEO_SCALE_W(dims) * VIDEO_SCALE_H(dims) * (rgb32 ? 4 : 2);
 
    if (exynos_realloc_buffer(pdata, buf_type, size) != 0)
       return;
 
-   src->width = width;
-   src->height = height;
-   src->stride = width * (rgb32 ? 4 : 2);
+   src->width = VIDEO_SCALE_W(dims);
+   src->height = VIDEO_SCALE_H(dims);
+   src->stride = VIDEO_SCALE_W(dims) * (rgb32 ? 4 : 2);
    src->color_mode = rgb32 ? G2D_COLOR_FMT_ARGB8888 | G2D_ORDER_RGBAX :
       G2D_COLOR_FMT_ARGB4444 | G2D_ORDER_RGBAX;
 
@@ -1445,8 +1453,8 @@ static void exynos_set_texture_enable(void *data, bool state, bool full_screen)
       vid->menu_active = state;
 }
 
-static void exynos_set_osd_msg(void *data, const char *msg,
-      const struct font_params *params) { }
+static void exynos_set_osd_msg(void *data, const char *msg, size_t msg_len,
+      const struct font_params *params, void *font) { }
 static void exynos_show_mouse(void *data, bool state) { }
 
 static const video_poke_interface_t exynos_poke_interface = {
@@ -1454,7 +1462,7 @@ static const video_poke_interface_t exynos_poke_interface = {
    NULL, /* load_texture */
    NULL, /* unload_texture */
    NULL, /* set_video_mode */
-   drm_get_refresh_rate,
+   NULL, /* refresh_rate - handled by display server */
    NULL, /* set_filtering */
    NULL, /* get_video_output_size */
    NULL, /* get_video_output_prev */
@@ -1471,10 +1479,11 @@ static const video_poke_interface_t exynos_poke_interface = {
    NULL, /* get_current_shader */
    NULL, /* get_current_software_framebuffer */
    NULL, /* get_hw_render_interface */
-   NULL, /* set_hdr_max_nits */
+   NULL, /* set_hdr_menu_nits */
    NULL, /* set_hdr_paper_white_nits */
-   NULL, /* set_hdr_contrast */
-   NULL  /* set_hdr_expand_gamut */
+   NULL, /* set_hdr_expand_gamut */
+   NULL, /* set_hdr_scanlines */
+   NULL  /* set_hdr_subpixel_layout */
 };
 
 static void exynos_get_poke_interface(void *data,
@@ -1504,12 +1513,13 @@ video_driver_t video_exynos = {
    exynos_set_rotation,
    exynos_viewport_info,
    NULL, /* read_viewport */
-   NULL, /* read_frame_raw */
 #ifdef HAVE_OVERLAY
    NULL, /* get_overlay_interface */
 #endif
    exynos_get_poke_interface,
    NULL, /* wrap_type_to_enum */
+   NULL, /* shader_load_begin */
+   NULL, /* shader_load_step */
 #ifdef HAVE_GFX_WIDGETS
    NULL  /* gfx_widgets_enabled */
 #endif

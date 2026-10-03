@@ -28,6 +28,7 @@
 #include "../include/vulkan/vulkan.h"
 
 #define VULKAN_ROLLING_SCANLINE_SIMULATION
+#define VULKAN_HDR_SWAPCHAIN
 
 RETRO_BEGIN_DECLS
 
@@ -79,6 +80,24 @@ struct vulkan_filter_chain_create_info
    const VkPhysicalDeviceMemoryProperties *memory_properties;
    VkPipelineCache pipeline_cache;
    VkQueue queue;
+   /* Guards host access to `queue`. The same VkQueue is submitted to by
+    * Vulkan HW-render cores out of retro_run(), through the
+    * lock_queue/unlock_queue pair in retro_hw_render_interface_vulkan,
+    * on a different thread from the one that owns the filter chain when
+    * threaded video is on. Function pointers rather than an slock_t* so
+    * this header stays clear of rthreads and of HAVE_THREADS. Both may
+    * be NULL, in which case no locking is done. */
+   void *queue_lock_handle;
+   void (*lock_queue)(void *handle);
+   void (*unlock_queue)(void *handle);
+   /* Waits, with the queue lock free, until every submission the video
+    * driver has made on `queue` has retired. The chain's resources are
+    * only ever referenced by those submissions, so this is all a chain
+    * rebuild or teardown needs to wait for. Called with
+    * queue_lock_handle. NULL falls back to vkDeviceWaitIdle under the
+    * lock, which also drains a hardware core's work and cannot complete
+    * while that core is itself parked on lock_queue. */
+   void (*wait_submissions)(void *handle);
    VkCommandPool command_pool;
    unsigned num_passes;
 
@@ -88,6 +107,9 @@ struct vulkan_filter_chain_create_info
       unsigned width, height;
    } max_input_size;
    struct vulkan_filter_chain_swapchain_info swapchain;
+#ifdef VULKAN_HDR_SWAPCHAIN
+   bool hdr_enabled;
+#endif /* VULKAN_HDR_SWAPCHAIN */ 
 };
 
 vulkan_filter_chain_t *vulkan_filter_chain_new(
@@ -116,6 +138,9 @@ void vulkan_filter_chain_set_input_texture(vulkan_filter_chain_t *chain,
       const struct vulkan_filter_chain_texture *texture);
 
 void vulkan_filter_chain_set_frame_count(vulkan_filter_chain_t *chain,
+      uint64_t count);
+
+void vulkan_filter_chain_set_swap_count(vulkan_filter_chain_t *chain,
       uint64_t count);
 
 void vulkan_filter_chain_set_frame_count_period(vulkan_filter_chain_t *chain,
@@ -151,6 +176,30 @@ void vulkan_filter_chain_set_core_aspect(vulkan_filter_chain_t *chain,
 void vulkan_filter_chain_set_core_aspect_rot(vulkan_filter_chain_t *chain,
       float coreaspectrot);
 
+#ifdef VULKAN_HDR_SWAPCHAIN
+void vulkan_filter_chain_set_hdr_mode(vulkan_filter_chain_t *chain,
+      unsigned hdr_mode);
+
+void vulkan_filter_chain_set_paper_white_nits(vulkan_filter_chain_t *chain,
+      float paper_white_nits);
+
+
+void vulkan_filter_chain_set_expand_gamut(vulkan_filter_chain_t *chain,
+      unsigned expand_gamut);
+
+void vulkan_filter_chain_set_scanlines(vulkan_filter_chain_t *chain,
+      float scanlines);
+
+void vulkan_filter_chain_set_subpixel_layout(vulkan_filter_chain_t *chain,
+      unsigned subpixel_layout);
+
+void vulkan_filter_chain_set_inverse_tonemap(vulkan_filter_chain_t *chain,
+      float inverse_tonemap);
+
+void vulkan_filter_chain_set_hdr10(vulkan_filter_chain_t *chain,
+      float hdr10);
+#endif /* VULKAN_HDR_SWAPCHAIN */
+
 void vulkan_filter_chain_build_offscreen_passes(vulkan_filter_chain_t *chain,
       VkCommandBuffer cmd, const VkViewport *vp);
 void vulkan_filter_chain_build_viewport_pass(vulkan_filter_chain_t *chain,
@@ -170,6 +219,22 @@ struct video_shader *vulkan_filter_chain_get_preset(
       vulkan_filter_chain_t *chain);
 
 bool vulkan_filter_chain_emits_hdr10(vulkan_filter_chain_t *chain);
+bool vulkan_filter_chain_emits_hdr16(vulkan_filter_chain_t *chain);
+
+/* ---- Deferred (per-frame) filter chain construction ---- */
+
+vulkan_filter_chain_t *vulkan_filter_chain_create_deferred(
+      const struct vulkan_filter_chain_create_info *info,
+      const char *path,
+      enum glslang_filter_chain_filter filter,
+      unsigned *out_num_passes);
+
+bool vulkan_filter_chain_compile_pass(
+      vulkan_filter_chain_t *chain,
+      unsigned pass_index,
+      enum glslang_filter_chain_filter filter);
+
+bool vulkan_filter_chain_finalize(vulkan_filter_chain_t *chain);
 
 RETRO_END_DECLS
 

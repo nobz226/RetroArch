@@ -18,8 +18,7 @@
 #endif
 
 #include <stdlib.h>
-
-#include <string/stdstring.h>
+#include <string.h>
 
 #ifdef HAVE_CONFIG_H
 #include "../../config.h"
@@ -373,6 +372,13 @@ void egl_bind_hw_render(egl_ctx_data_t *egl, bool enable)
          enable ? egl->hw_ctx : egl->ctx);
 }
 
+void egl_release_current(egl_ctx_data_t *egl)
+{
+   if (!egl || egl->dpy == EGL_NO_DISPLAY)
+      return;
+   _egl_make_current(egl->dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+}
+
 void egl_swap_buffers(void *data)
 {
    egl_ctx_data_t *egl = (egl_ctx_data_t*)data;
@@ -403,10 +409,9 @@ void egl_set_swap_interval(egl_ctx_data_t *egl, int interval)
    }
 }
 
-void egl_get_video_size(egl_ctx_data_t *egl, unsigned *width, unsigned *height)
+void egl_get_video_size(egl_ctx_data_t *egl, unsigned *dims)
 {
-   *width  = 0;
-   *height = 0;
+   *dims = VIDEO_SCALE_PACK(0, 0);
 
    if (egl->dpy != EGL_NO_DISPLAY && egl->surf != EGL_NO_SURFACE)
    {
@@ -414,8 +419,7 @@ void egl_get_video_size(egl_ctx_data_t *egl, unsigned *width, unsigned *height)
 
       _egl_query_surface(egl->dpy, egl->surf, EGL_WIDTH, &gl_width);
       _egl_query_surface(egl->dpy, egl->surf, EGL_HEIGHT, &gl_height);
-      *width  = gl_width;
-      *height = gl_height;
+      *dims = VIDEO_SCALE_PACK(gl_width, gl_height);
    }
 }
 
@@ -426,15 +430,21 @@ static bool check_egl_version(int min_major_version, int min_minor_version)
 
    if (str)
    {
-      int major, minor;
-      if (sscanf(str, "%d.%d", &major, &minor) == 2)
+      char *endptr;
+      int major = (int)strtol(str, &endptr, 10);
+      if (endptr != str && *endptr == '.')
       {
-         if (major >= min_major_version)
+         const char *minor_str = endptr + 1;
+         int minor = (int)strtol(minor_str, &endptr, 10);
+         if (endptr != minor_str)
          {
-            if (major > min_major_version)
-               return true;
-            else if (minor >= min_minor_version)
-               return true;
+            if (major >= min_major_version)
+            {
+               if (major > min_major_version)
+                  return true;
+               else if (minor >= min_minor_version)
+                  return true;
+            }
          }
       }
    }
@@ -496,7 +506,7 @@ static EGLDisplay get_egl_display(EGLenum platform, void *native)
 #endif /* defined(EGL_VERSION_1_5) */
 
 #if defined(EGL_EXT_platform_base)
-      if (check_egl_client_extension("EGL_EXT_platform_base", STRLEN_CONST("EGL_EXT_platform_base")))
+      if (check_egl_client_extension("EGL_EXT_platform_base", (sizeof("EGL_EXT_platform_base")-1)))
       {
          PFNEGLGETPLATFORMDISPLAYEXTPROC ptr_eglGetPlatformDisplayEXT;
 
@@ -576,6 +586,7 @@ bool egl_init_context_common(
             configs, *count, &matched) || !matched)
    {
       RARCH_ERR("[EGL] No EGL configs with appropriate attributes.\n");
+      free(configs);
       return false;
    }
 
@@ -688,6 +699,9 @@ bool egl_create_surface(egl_ctx_data_t *egl, void *native_window)
 	   EGL_NONE,
    };
 
+   if (!egl_destroy_surface(egl))
+      return false;
+
    egl->surf = _egl_create_window_surface(egl->dpy, egl->config, (NativeWindowType)native_window, window_attribs);
 
    if (egl->surf == EGL_NO_SURFACE)
@@ -695,9 +709,28 @@ bool egl_create_surface(egl_ctx_data_t *egl, void *native_window)
 
    /* Connect the context to the surface. */
    if (!_egl_make_current(egl->dpy, egl->surf, egl->surf, egl->ctx))
+   {
+      _egl_destroy_surface(egl->dpy, egl->surf);
+      egl->surf = EGL_NO_SURFACE;
       return false;
+   }
 
    RARCH_LOG("[EGL] Current context: %p.\n", (void*)_egl_get_current_context());
 
+   return true;
+}
+
+bool egl_destroy_surface(egl_ctx_data_t *egl)
+{
+   if (egl->surf == EGL_NO_SURFACE)
+      return true;
+
+   if (!_egl_make_current(egl->dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT))
+      return false;
+
+   if (!_egl_destroy_surface(egl->dpy, egl->surf))
+      return false;
+
+   egl->surf = EGL_NO_SURFACE;
    return true;
 }

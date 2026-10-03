@@ -71,6 +71,11 @@
                                             * 3 - Late
                                             */
 
+#define RETRO_ENVIRONMENT_SET_SAVE_STATE_DISABLE_UNDO (5 | RETRO_ENVIRONMENT_RETROARCH_START_BLOCK)
+                                            /* bool * --
+                                            * If true, disables the save state save/load undo feature to conserve memory.
+                                            */
+
 #define DRIVERS_CMD_ALL \
       ( DRIVER_AUDIO_MASK \
       | DRIVER_MICROPHONE_MASK \
@@ -79,7 +84,6 @@
       | DRIVER_CAMERA_MASK \
       | DRIVER_LOCATION_MASK \
       | DRIVER_MENU_MASK \
-      | DRIVERS_VIDEO_INPUT_MASK \
       | DRIVER_BLUETOOTH_MASK \
       | DRIVER_WIFI_MASK \
       | DRIVER_LED_MASK \
@@ -122,6 +126,11 @@ void retroarch_override_setting_unset(enum rarch_override_setting enum_idx, void
 bool retroarch_override_setting_is_set(enum rarch_override_setting enum_idx, void *data);
 
 const char* video_shader_get_current_shader_preset(void);
+
+/* Cancels and drains the task queue (bounded) so in-flight tasks
+ * retire while the subsystems their callbacks reach are alive.
+ * main_exit() runs it first; exposed for the exit-drain harness. */
+void retroarch_drain_tasks_for_exit(void);
 
 /**
  * retroarch_main_init:

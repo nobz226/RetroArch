@@ -37,6 +37,8 @@
 		07912FC22E22B3FF004AA331 /* AppIntents.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 07912FC12E22B3FF004AA331 /* AppIntents.framework */; settings = {ATTRIBUTES = (Weak, ); }; };
 		07B7872D29E8FE8F0088B74F /* filters in Resources */ = {isa = PBXBuildFile; fileRef = 07B7872C29E8FE8F0088B74F /* filters */; };
 		07B9B97C2E499D34007E419E /* RetroArchAppShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 076EAFD82E1F70D100C727AD /* RetroArchAppShortcuts.swift */; };
+		07ATRANS032025010700000003 /* AppleTranslateBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07ATRANS012025010700000001 /* AppleTranslateBackend.swift */; };
+		07ATRANS042025010700000004 /* AppleTranslateBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07ATRANS012025010700000001 /* AppleTranslateBackend.swift */; };
 		07C5C6402CD167470030FBEC /* GCDWebDAVServer.m in Sources */ = {isa = PBXBuildFile; fileRef = 07C5C63E2CD167470030FBEC /* GCDWebDAVServer.m */; };
 		07F7FB022A2DA8B800037C04 /* filters in Resources */ = {isa = PBXBuildFile; fileRef = 07F7FB012A2DA8B800037C04 /* filters */; };
 		9204BE0D1D319EF300BD49DB /* griffin_objc.m in Sources */ = {isa = PBXBuildFile; fileRef = 50521A431AA23BF500185CC9 /* griffin_objc.m */; };
@@ -63,8 +65,6 @@
 		9210C2F724B3A32D00E6FE7C /* griffin_cpp.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 9210C2F424B3A32D00E6FE7C /* griffin_cpp.cpp */; };
 		9210C2F824B3A32D00E6FE7C /* griffin_glslang.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 9210C2F524B3A32D00E6FE7C /* griffin_glslang.cpp */; };
 		9210C2F924B3A32D00E6FE7C /* griffin_glslang.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 9210C2F524B3A32D00E6FE7C /* griffin_glslang.cpp */; };
-		9210C2FC24B4CB4900E6FE7C /* menu_pipeline.metal in Sources */ = {isa = PBXBuildFile; fileRef = 9210C2FA24B4CB4900E6FE7C /* menu_pipeline.metal */; };
-		9210C2FD24B4CB4900E6FE7C /* menu_pipeline.metal in Sources */ = {isa = PBXBuildFile; fileRef = 9210C2FA24B4CB4900E6FE7C /* menu_pipeline.metal */; };
 		9210C2FE24B4CB4900E6FE7C /* Shaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = 9210C2FB24B4CB4900E6FE7C /* Shaders.metal */; };
 		9210C2FF24B4CB4900E6FE7C /* Shaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = 9210C2FB24B4CB4900E6FE7C /* Shaders.metal */; };
 		9222F1FF2314BA7C0097C0FD /* assets.zip in Resources */ = {isa = PBXBuildFile; fileRef = 9222F1FE2314BA7C0097C0FD /* assets.zip */; };
@@ -176,6 +176,8 @@
 		076A9EAF2C438E1D00504BDF /* RetroArchiOS.entitlements */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.entitlements; name = RetroArchiOS.entitlements; path = iOS/RetroArchiOS.entitlements; sourceTree = SOURCE_ROOT; };
 		076CA50C2B695C2C00840EA5 /* libz.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libz.tbd; path = Platforms/AppleTVOS.platform/Developer/SDKs/AppleTVOS17.2.sdk/usr/lib/libz.tbd; sourceTree = DEVELOPER_DIR; };
 		076EAFD82E1F70D100C727AD /* RetroArchAppShortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RetroArchAppShortcuts.swift; sourceTree = "<group>"; };
+		07ATRANS012025010700000001 /* AppleTranslateBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppleTranslateBackend.swift; path = ../../ui/drivers/cocoa/AppleTranslateBackend.swift; sourceTree = SOURCE_ROOT; };
+		07ATRANS022025010700000002 /* translation_driver_apple.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = translation_driver_apple.h; path = ../../ui/drivers/cocoa/translation_driver_apple.h; sourceTree = SOURCE_ROOT; };
 		077AB2C82BFB0E28002BBE2F /* AppStore.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = AppStore.xcconfig; path = iOS/AppStore.xcconfig; sourceTree = "<group>"; };
 		07912FC12E22B3FF004AA331 /* AppIntents.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppIntents.framework; path = System/Library/Frameworks/AppIntents.framework; sourceTree = SDKROOT; };
 		07B7872C29E8FE8F0088B74F /* filters */ = {isa = PBXFileReference; lastKnownFileType = folder; path = filters; sourceTree = "<group>"; };
@@ -198,8 +200,7 @@
 		9210C2F124B3A19100E6FE7C /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
 		9210C2F424B3A32D00E6FE7C /* griffin_cpp.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = griffin_cpp.cpp; path = ../../griffin/griffin_cpp.cpp; sourceTree = "<group>"; };
 		9210C2F524B3A32D00E6FE7C /* griffin_glslang.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = griffin_glslang.cpp; path = ../../griffin/griffin_glslang.cpp; sourceTree = "<group>"; };
-		9210C2FA24B4CB4900E6FE7C /* menu_pipeline.metal */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.metal; name = menu_pipeline.metal; path = ../../gfx/common/metal/menu_pipeline.metal; sourceTree = "<group>"; };
-		9210C2FB24B4CB4900E6FE7C /* Shaders.metal */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.metal; name = Shaders.metal; path = ../../gfx/common/metal/Shaders.metal; sourceTree = "<group>"; };
+		9210C2FB24B4CB4900E6FE7C /* Shaders.metal */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.metal; name = Shaders.metal; path = ../../gfx/drivers/metal_shaders/Shaders.metal; sourceTree = "<group>"; };
 		9222F1FE2314BA7C0097C0FD /* assets.zip */ = {isa = PBXFileReference; lastKnownFileType = archive.zip; path = assets.zip; sourceTree = "<group>"; };
 		9222F2082315DAD50097C0FD /* Launch Screen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = "Launch Screen.storyboard"; sourceTree = "<group>"; };
 		9222F20A2315DD3D0097C0FD /* retroarch_logo.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = retroarch_logo.png; sourceTree = "<group>"; };
@@ -237,8 +238,6 @@
 		92B9EB6A24E0518700E6CFB2 /* fopen_utf8.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = fopen_utf8.h; sourceTree = "<group>"; };
 		92B9EB6B24E0518700E6CFB2 /* intrinsics.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = intrinsics.h; sourceTree = "<group>"; };
 		92B9EB6C24E0518700E6CFB2 /* posix_string.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = posix_string.h; sourceTree = "<group>"; };
-		92B9EB6E24E0518700E6CFB2 /* zlib.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = zlib.h; sourceTree = "<group>"; };
-		92B9EB6F24E0518700E6CFB2 /* zconf.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = zconf.h; sourceTree = "<group>"; };
 		92B9EB7024E0518700E6CFB2 /* getopt.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = getopt.h; sourceTree = "<group>"; };
 		92B9EB7124E0518700E6CFB2 /* fnmatch.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = fnmatch.h; sourceTree = "<group>"; };
 		92B9EB7224E0518700E6CFB2 /* msvc.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = msvc.h; sourceTree = "<group>"; };
@@ -253,7 +252,7 @@
 		92B9EB7F24E0518700E6CFB2 /* net_http.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = net_http.h; sourceTree = "<group>"; };
 		92B9EB8024E0518700E6CFB2 /* net_http_parse.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = net_http_parse.h; sourceTree = "<group>"; };
 		92B9EB8124E0518700E6CFB2 /* retro_timers.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = retro_timers.h; sourceTree = "<group>"; };
-		92B9EB8324E0518700E6CFB2 /* m3u_file.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = m3u_file.h; sourceTree = "<group>"; };
+		92B9EB8324E0518700E6CFB2 /* rm3u.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = rm3u.h; sourceTree = "<group>"; };
 		92B9EB8424E0518700E6CFB2 /* rjson.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = rjson.h; sourceTree = "<group>"; };
 		92B9EB8524E0518700E6CFB2 /* rxml.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = rxml.h; sourceTree = "<group>"; };
 		92B9EB8624E0518700E6CFB2 /* cdfs.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = cdfs.h; sourceTree = "<group>"; };
@@ -398,7 +397,6 @@
 		92B9ECBF24E054B500E6CFB2 /* core_backup.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = core_backup.h; path = ../../core_backup.h; sourceTree = "<group>"; };
 		92B9ECC024E054B500E6CFB2 /* disk_control_interface.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = disk_control_interface.h; path = ../../disk_control_interface.h; sourceTree = "<group>"; };
 		92B9ECC124E054B600E6CFB2 /* msg_hash.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; name = msg_hash.c; path = ../../msg_hash.c; sourceTree = "<group>"; };
-		92B9ECC224E054B600E6CFB2 /* nvda_controller.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = nvda_controller.h; path = ../../nvda_controller.h; sourceTree = "<group>"; };
 		92B9ECC324E054B600E6CFB2 /* defaults.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = defaults.h; path = ../../defaults.h; sourceTree = "<group>"; };
 		92B9ECC424E054B600E6CFB2 /* database_info.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; name = database_info.c; path = ../../database_info.c; sourceTree = "<group>"; };
 		92B9ECC524E054B600E6CFB2 /* runtime_file.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; name = runtime_file.c; path = ../../runtime_file.c; sourceTree = "<group>"; };
@@ -525,7 +523,9 @@
 		07649B662E1C47220003184B /* AppIntents */ = {
 			isa = PBXGroup;
 			children = (
+				07ATRANS012025010700000001 /* AppleTranslateBackend.swift */,
 				076EAFD82E1F70D100C727AD /* RetroArchAppShortcuts.swift */,
+				07ATRANS022025010700000002 /* translation_driver_apple.h */,
 			);
 			path = AppIntents;
 			sourceTree = "<group>";
@@ -712,8 +712,6 @@
 		92B9EB6D24E0518700E6CFB2 /* zlib */ = {
 			isa = PBXGroup;
 			children = (
-				92B9EB6E24E0518700E6CFB2 /* zlib.h */,
-				92B9EB6F24E0518700E6CFB2 /* zconf.h */,
 			);
 			path = zlib;
 			sourceTree = "<group>";
@@ -750,7 +748,7 @@
 		92B9EB8224E0518700E6CFB2 /* formats */ = {
 			isa = PBXGroup;
 			children = (
-				92B9EB8324E0518700E6CFB2 /* m3u_file.h */,
+				92B9EB8324E0518700E6CFB2 /* rm3u.h */,
 				92B9EB8424E0518700E6CFB2 /* rjson.h */,
 				92B9EB8524E0518700E6CFB2 /* rxml.h */,
 				92B9EB8624E0518700E6CFB2 /* cdfs.h */,
@@ -1039,7 +1037,6 @@
 				92B9ECBE24E054B500E6CFB2 /* manual_content_scan.h */,
 				92B9ECC124E054B600E6CFB2 /* msg_hash.c */,
 				92B9ECAE24E054B400E6CFB2 /* msg_hash.h */,
-				92B9ECC224E054B600E6CFB2 /* nvda_controller.h */,
 				92B9ECAA24E054B400E6CFB2 /* paths.h */,
 				92B9ECA524E054B300E6CFB2 /* performance_counters.h */,
 				92B9EC9F24E053BD00E6CFB2 /* playlist.c */,
@@ -1150,7 +1147,6 @@
 				92B9EAE024E04F8800E6CFB2 /* Sources */,
 				9222F2082315DAD50097C0FD /* Launch Screen.storyboard */,
 				9222F1FE2314BA7C0097C0FD /* assets.zip */,
-				9210C2FA24B4CB4900E6FE7C /* menu_pipeline.metal */,
 				9210C2FB24B4CB4900E6FE7C /* Shaders.metal */,
 				83D632D719ECFCC4009E3161 /* iOS */,
 				926C77D821FD1E6500103EDE /* tvOS */,
@@ -1546,8 +1542,8 @@
 				92CC05B421FE3C1700FF79F0 /* GCDWebServerURLEncodedFormRequest.m in Sources */,
 				92CC05B021FE3C1700FF79F0 /* GCDWebServerDataResponse.m in Sources */,
 				92CC05C221FE3C6D00FF79F0 /* WebServer.m in Sources */,
+				07ATRANS032025010700000003 /* AppleTranslateBackend.swift in Sources */,
 				076EAFD92E1F70D100C727AD /* RetroArchAppShortcuts.swift in Sources */,
-				9210C2FC24B4CB4900E6FE7C /* menu_pipeline.metal in Sources */,
 				9210C2FE24B4CB4900E6FE7C /* Shaders.metal in Sources */,
 				92CC05BA21FE3C1700FF79F0 /* GCDWebServerFileRequest.m in Sources */,
 				92CC05AE21FE3C1700FF79F0 /* GCDWebServerFileResponse.m in Sources */,
@@ -1577,7 +1573,6 @@
 				92CC05B521FE3C1700FF79F0 /* GCDWebServerURLEncodedFormRequest.m in Sources */,
 				92CC05B121FE3C1700FF79F0 /* GCDWebServerDataResponse.m in Sources */,
 				92CC05C321FE3C6D00FF79F0 /* WebServer.m in Sources */,
-				9210C2FD24B4CB4900E6FE7C /* menu_pipeline.metal in Sources */,
 				9210C2FF24B4CB4900E6FE7C /* Shaders.metal in Sources */,
 				92CC05BB21FE3C1700FF79F0 /* GCDWebServerFileRequest.m in Sources */,
 				92CC05AF21FE3C1700FF79F0 /* GCDWebServerFileResponse.m in Sources */,
@@ -1585,6 +1580,7 @@
 				073734A42A093A5700BF7397 /* JITSupport.m in Sources */,
 				92CC05B321FE3C1700FF79F0 /* GCDWebServerStreamedResponse.m in Sources */,
 				92CC05A321FE3C1700FF79F0 /* GCDWebServerResponse.m in Sources */,
+				07ATRANS042025010700000004 /* AppleTranslateBackend.swift in Sources */,
 				07B9B97C2E499D34007E419E /* RetroArchAppShortcuts.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1649,7 +1645,7 @@
 				SKIP_INSTALL = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				TARGETED_DEVICE_FAMILY = 3;
-				TVOS_DEPLOYMENT_TARGET = 13.0;
+				TVOS_DEPLOYMENT_TARGET = "$(RA_TVOS_DEPLOYMENT_TARGET:default=13.0)";
 			};
 			name = Debug;
 		};
@@ -1677,7 +1673,7 @@
 				SKIP_INSTALL = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				TARGETED_DEVICE_FAMILY = 3;
-				TVOS_DEPLOYMENT_TARGET = 13.0;
+				TVOS_DEPLOYMENT_TARGET = "$(RA_TVOS_DEPLOYMENT_TARGET:default=13.0)";
 			};
 			name = Release;
 		};
@@ -1873,7 +1869,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = RetroArch;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
 				IOS_BUNDLE_IDENTIFIER = com.libretro.RetroArchiOS11;
-				IPHONEOS_DEPLOYMENT_TARGET = 12.0;
+				IPHONEOS_DEPLOYMENT_TARGET = "$(RA_IPHONEOS_DEPLOYMENT_TARGET:default=12.0)";
 				LIBRARY_SEARCH_PATHS = "";
 				LLVM_LTO = YES_THIN;
 				MARKETING_VERSION = 1.22.2;
@@ -1886,7 +1882,7 @@
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TVOS_BUNDLE_IDENTIFIER = com.libretro.dist.tvos.RetroArch;
 				TVOS_CODE_SIGN_ENTITLEMENTS = "";
-				TVOS_DEPLOYMENT_TARGET = 11.0;
+				TVOS_DEPLOYMENT_TARGET = "$(RA_TVOS_DEPLOYMENT_TARGET:default=11.0)";
 			};
 			name = Debug;
 		};
@@ -1921,7 +1917,7 @@
 				GCC_C_LANGUAGE_STANDARD = gnu99;
 				GCC_FAST_MATH = YES;
 				GCC_NO_COMMON_BLOCKS = YES;
-				GCC_OPTIMIZATION_LEVEL = fast;
+				GCC_OPTIMIZATION_LEVEL = 3;
 				GCC_WARN_ABOUT_DEPRECATED_FUNCTIONS = NO;
 				GCC_WARN_ABOUT_RETURN_TYPE = YES;
 				GCC_WARN_UNDECLARED_SELECTOR = YES;
@@ -1932,7 +1928,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = RetroArch;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
 				IOS_BUNDLE_IDENTIFIER = com.libretro.RetroArchiOS11;
-				IPHONEOS_DEPLOYMENT_TARGET = 12.0;
+				IPHONEOS_DEPLOYMENT_TARGET = "$(RA_IPHONEOS_DEPLOYMENT_TARGET:default=12.0)";
 				LIBRARY_SEARCH_PATHS = "";
 				LLVM_LTO = YES_THIN;
 				MARKETING_VERSION = 1.22.2;
@@ -1945,7 +1941,7 @@
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TVOS_BUNDLE_IDENTIFIER = com.libretro.dist.tvos.RetroArch;
 				TVOS_CODE_SIGN_ENTITLEMENTS = "";
-				TVOS_DEPLOYMENT_TARGET = 11.0;
+				TVOS_DEPLOYMENT_TARGET = "$(RA_TVOS_DEPLOYMENT_TARGET:default=11.0)";
 				VALIDATE_PRODUCT = YES;
 			};
 			name = Release;

@@ -24,6 +24,7 @@
 
 #include <gfx/video_frame.h>
 #include <string/stdstring.h>
+#include <memcpy_nt.h>
 #include <encodings/utf.h>
 #include <features/features_cpu.h>
 
@@ -38,7 +39,7 @@
 #include "../../dingux/dingux_utils.h"
 
 #include "../../verbosity.h"
-#include "../../gfx/drivers_font_renderer/bitmap.h"
+#include "../bitmapfont.h"
 #include "../../configuration.h"
 #include "../../retroarch.h"
 #if defined(DINGUX_BETA)
@@ -78,6 +79,15 @@ typedef struct sdl_dingux_video
    bool was_in_menu;
    bool quitting;
    bool mode_valid;
+   /* What the last frame said the IPU filter should be: set_filtering()
+    * runs on the video thread under the threaded wrapper, and reading
+    * the setting there races the menu writing it. */
+   unsigned frame_ipu_filter_type;
+   /* What the last frame said these should be: apply_state_changes()
+    * is run by the video thread from thread_update_driver_state(), and
+    * reading the settings there races the menu writing them. */
+   bool frame_ipu_keep_aspect;
+   bool frame_integer_scaling;
 } sdl_dingux_video_t;
 
 static void sdl_dingux_init_font_color(sdl_dingux_video_t *vid)
@@ -133,7 +143,7 @@ static void sdl_dingux_blit_text16(
          screen_height - vid->frame_padding_y)
       return;
 
-   while (!string_is_empty(str))
+   while (str && *str)
    {
       /* Check for out of bounds x coordinates */
       if (x_pos + FONT_WIDTH_STRIDE + 1 >=
@@ -216,7 +226,7 @@ static void sdl_dingux_blit_text32(
          screen_height - vid->frame_padding_y)
       return;
 
-   while (!string_is_empty(str))
+   while (str && *str)
    {
       /* Check for out of bounds x coordinates */
       if (x_pos + FONT_WIDTH_STRIDE + 1 >=
@@ -349,7 +359,7 @@ static void sdl_dingux_input_driver_init(
 
    /* If input driver name is empty, cannot
     * initialise anything... */
-   if (string_is_empty(input_drv_name))
+   if (!input_drv_name || !*input_drv_name)
       return;
 
    if (string_is_equal(input_drv_name, "sdl_dingux"))
@@ -366,11 +376,16 @@ static void sdl_dingux_input_driver_init(
 #if defined(HAVE_SDL) || defined(HAVE_SDL2)
    if (string_is_equal(input_drv_name, "sdl"))
    {
-      *input_data = input_driver_init_wrap(&input_sdl,
+#ifdef HAVE_SDL2
+      input_driver_t *sdl_drv = &input_sdl2;
+#else
+      input_driver_t *sdl_drv = &input_sdl1;
+#endif
+      *input_data = input_driver_init_wrap(sdl_drv,
             joypad_drv_name);
 
       if (*input_data)
-         *input = &input_sdl;
+         *input = sdl_drv;
 
       return;
    }
@@ -692,28 +707,27 @@ static void sdl_dingux_blit_frame16(sdl_dingux_video_t *vid,
          (vid->frame_padding_y * dst_pitch));
 
    /* If source and destination buffers have the
-    * same pitch, perform fast copy of raw pixel data */
+    * same pitch, perform fast copy of raw pixel data.
+    * Streaming stores: the surface is written once here and next
+    * touched by the display engine, and on these SoCs (256 KB L2 or
+    * less) letting the copy allocate ~150 KB of lines evicts the
+    * core's working set every frame.  memcpy_nt also skips the
+    * read-for-ownership DRAM read of every destination line. */
    if (src_pitch == dst_pitch)
-      memcpy(out_ptr, in_ptr, src_pitch * height);
+      memcpy_nt(out_ptr, in_ptr, src_pitch * height);
    else
    {
-      /* Otherwise copy pixel data line-by-line */
-
-      /* 16 bit - divide pitch by 2 */
-      uint16_t in_stride  = (uint16_t)(src_pitch >> 1);
-      uint16_t out_stride = (uint16_t)(dst_pitch >> 1);
-      size_t y;
+      /* Otherwise copy the padded rectangle line by line.  Still
+       * streaming: a single line is far below memcpy_nt's threshold,
+       * so memcpy_nt per line would degrade to memcpy and reintroduce
+       * exactly the eviction the fast path above avoids. */
 
       /* If SDL surface has horizontal padding,
        * shift output image to the right */
       out_ptr += vid->frame_padding_x;
 
-      for (y = 0; y < height; y++)
-      {
-         memcpy(out_ptr, in_ptr, width * sizeof(uint16_t));
-         in_ptr  += in_stride;
-         out_ptr += out_stride;
-      }
+      memcpy_nt_2d(out_ptr, dst_pitch, in_ptr, src_pitch,
+            width * sizeof(uint16_t), height);
    }
 }
 
@@ -727,28 +741,21 @@ static void sdl_dingux_blit_frame32(sdl_dingux_video_t *vid,
          (vid->frame_padding_y * dst_pitch));
 
    /* If source and destination buffers have the
-    * same pitch, perform fast copy of raw pixel data */
+    * same pitch, perform fast copy of raw pixel data.
+    * Streaming stores; see the 16-bit path above. */
    if (src_pitch == dst_pitch)
-      memcpy(out_ptr, in_ptr, src_pitch * height);
+      memcpy_nt(out_ptr, in_ptr, src_pitch * height);
    else
    {
-      /* Otherwise copy pixel data line-by-line */
-
-      /* 32 bit - divide pitch by 4 */
-      uint32_t in_stride  = (uint32_t)(src_pitch >> 2);
-      uint32_t out_stride = (uint32_t)(dst_pitch >> 2);
-      size_t y;
+      /* Otherwise copy the padded rectangle line by line; see the
+       * 16-bit path above for why this is not memcpy_nt per line. */
 
       /* If SDL surface has horizontal padding,
        * shift output image to the right */
       out_ptr += vid->frame_padding_x;
 
-      for (y = 0; y < height; y++)
-      {
-         memcpy(out_ptr, in_ptr, width * sizeof(uint32_t));
-         in_ptr  += in_stride;
-         out_ptr += out_stride;
-      }
+      memcpy_nt_2d(out_ptr, dst_pitch, in_ptr, src_pitch,
+            width * sizeof(uint32_t), height);
    }
 }
 
@@ -759,6 +766,15 @@ static bool sdl_dingux_gfx_frame(void *data, const void *frame,
    sdl_dingux_video_t* vid = (sdl_dingux_video_t*)data;
 #ifdef HAVE_MENU
    bool menu_is_alive      = (video_info->menu_st_flags & MENU_ST_FLAG_ALIVE) ? true : false;
+
+   /* Travels with the frame, for set_filtering() to read rather than
+    * the setting the menu writes */
+   if (vid)
+   {
+      vid->frame_ipu_filter_type = video_info->dingux_ipu_filter_type;
+      vid->frame_ipu_keep_aspect = video_info->dingux_ipu_keep_aspect;
+      vid->frame_integer_scaling = video_info->scale_integer;
+   }
 #endif
 
    /* Return early if:
@@ -878,18 +894,18 @@ static void sdl_dingux_set_texture_enable(void *data, bool state, bool full_scre
 }
 
 static void sdl_dingux_set_texture_frame(void *data, const void *frame, bool rgb32,
-      unsigned width, unsigned height, float alpha)
+      unsigned dims, float alpha)
 {
    sdl_dingux_video_t *vid = (sdl_dingux_video_t*)data;
 
    if (unlikely(
            !vid
          || rgb32
-         || (width > SDL_DINGUX_MENU_WIDTH)
-         || (height > SDL_DINGUX_MENU_HEIGHT)))
+         || (VIDEO_SCALE_W(dims) > SDL_DINGUX_MENU_WIDTH)
+         || (VIDEO_SCALE_H(dims) > SDL_DINGUX_MENU_HEIGHT)))
       return;
 
-   memcpy(vid->menu_texture, frame, width * height * sizeof(uint16_t));
+   memcpy(vid->menu_texture, frame, VIDEO_SCALE_W(dims) * VIDEO_SCALE_H(dims) * sizeof(uint16_t));
 }
 
 static void sdl_dingux_gfx_set_nonblock_state(void *data, bool toggle,
@@ -978,10 +994,9 @@ static void sdl_dingux_gfx_viewport_info(void *data, struct video_viewport *vp)
    if (unlikely(!vid))
       return;
 
-   vp->x      = 0;
-   vp->y      = 0;
-   vp->width  = vp->full_width  = vid->frame_width;
-   vp->height = vp->full_height = vid->frame_height;
+   vp->pos    = VIDEO_POS_PACK(0, 0);
+   vp->dims   = vp->full_dims   = VIDEO_SCALE_PACK(vid->frame_width,
+         vid->frame_height);
 }
 
 static float sdl_dingux_get_refresh_rate(void *data)
@@ -1007,12 +1022,13 @@ static float sdl_dingux_get_refresh_rate(void *data)
 static void sdl_dingux_set_filtering(void *data, unsigned index, bool smooth, bool ctx_scaling)
 {
    sdl_dingux_video_t *vid                     = (sdl_dingux_video_t*)data;
-   settings_t *settings                        = config_get_ptr();
-   enum dingux_ipu_filter_type ipu_filter_type = (settings) ?
-         (enum dingux_ipu_filter_type)settings->uints.video_dingux_ipu_filter_type :
+   /* What the last frame carried, not what the setting says now: this
+    * runs on the video thread under the threaded wrapper. */
+   enum dingux_ipu_filter_type ipu_filter_type = (vid) ?
+         (enum dingux_ipu_filter_type)vid->frame_ipu_filter_type :
          DINGUX_IPU_FILTER_BICUBIC;
 
-   if (!vid || !settings)
+   if (!vid)
       return;
 
    /* Update IPU filter setting, if required */
@@ -1026,11 +1042,12 @@ static void sdl_dingux_set_filtering(void *data, unsigned index, bool smooth, bo
 static void sdl_dingux_apply_state_changes(void *data)
 {
    sdl_dingux_video_t *vid  = (sdl_dingux_video_t*)data;
-   settings_t *settings     = config_get_ptr();
-   bool ipu_keep_aspect     = (settings) ? settings->bools.video_dingux_ipu_keep_aspect : true;
-   bool ipu_integer_scaling = (settings) ? settings->bools.video_scale_integer : false;
+   /* What the last frame carried, not what the settings say now: the
+    * video thread runs this from thread_update_driver_state(). */
+   bool ipu_keep_aspect     = (vid) ? vid->frame_ipu_keep_aspect : true;
+   bool ipu_integer_scaling = (vid) ? vid->frame_integer_scaling : false;
 
-   if (!vid || !settings)
+   if (!vid)
       return;
 
    /* Update IPU scaling mode, if required */
@@ -1086,10 +1103,11 @@ static const video_poke_interface_t sdl_dingux_poke_interface = {
    NULL, /* get_current_shader */
    NULL, /* get_current_software_framebuffer */
    NULL, /* get_hw_render_interface */
-   NULL, /* set_hdr_max_nits */
+   NULL, /* set_hdr_menu_nits */
    NULL, /* set_hdr_paper_white_nits */
-   NULL, /* set_hdr_contrast */
-   NULL  /* set_hdr_expand_gamut */
+   NULL, /* set_hdr_expand_gamut */
+   NULL, /* set_hdr_scanlines */
+   NULL  /* set_hdr_subpixel_layout */
 };
 
 static void sdl_dingux_get_poke_interface(void *data, const video_poke_interface_t **iface)
@@ -1118,12 +1136,13 @@ video_driver_t video_sdl_dingux = {
    NULL, /* set_rotation */
    sdl_dingux_gfx_viewport_info,
    NULL, /* read_viewport  */
-   NULL, /* read_frame_raw */
 #ifdef HAVE_OVERLAY
    NULL, /* get_overlay_interface */
 #endif
    sdl_dingux_get_poke_interface,
    NULL, /* wrap_type_to_enum */
+   NULL, /* shader_load_begin */
+   NULL, /* shader_load_step */
 #ifdef HAVE_GFX_WIDGETS
    NULL  /* gfx_widgets_enabled */
 #endif

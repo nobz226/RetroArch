@@ -1,6 +1,6 @@
 /*  RetroArch - A frontend for libretro.
  *  Copyright (C) 2015-2018 - Andre Leiradella
- *  Copyright (C) 2019-2023 - Brian Weiss
+ *  Copyright (C) 2019-2026 - Brian Weiss
  *
  *  RetroArch is free software: you can redistribute it and/or modify it under the terms
  *  of the GNU General Public License as published by the Free Software Found-
@@ -23,7 +23,6 @@
 #include <streams/file_stream.h>
 #include <features/features_cpu.h>
 #include <formats/cdfs.h>
-#include <formats/m3u_file.h>
 #include <compat/strl.h>
 #include <retro_miscellaneous.h>
 #include <retro_math.h>
@@ -90,7 +89,14 @@ static rcheevos_locals_t rcheevos_locals =
    NULL, /* client */
    {{0}},/* memory */
 #ifdef HAVE_THREADS
-   CMD_EVENT_NONE, /* queued_command */
+   /* queued_command (atomic). CMD_EVENT_NONE == 0. The initializer macro
+    * expands to a braced form only under CXX_BUILD, where
+    * retro_atomic_int_t is std::atomic<int> and list-initialization is
+    * required; the C backends are plain scalars. */
+   RETRO_ATOMIC_INT_INITIALIZER(0),
+   /* load_generation (atomic). Starts at 0; bumped by
+    * rcheevos_unload and rcheevos_load. */
+   RETRO_ATOMIC_INT_INITIALIZER(0),
 #endif
    "",   /* user_agent_prefix */
    "",   /* user_agent_core */
@@ -98,11 +104,18 @@ static rcheevos_locals_t rcheevos_locals =
    NULL, /* menuitems */
    0,    /* menuitem_capacity */
    0,    /* menuitem_count */
+   0,    /* menuitem_info_type */
+   0,    /* menuitem_submenu_type */
+   0,    /* menuitem_submenu_id */
 #endif
+   NULL, /* hash_error */
    true, /* hardcore_allowed */
    false,/* hardcore_requires_reload */
    false,/* hardcore_being_enabled */
-   true  /* core_supports */
+   true, /* core_supports */
+   false,/* has_unsupported_achievements */
+   false,/* badges_loaded */
+   false /* badges_loading */
 };
 
 rcheevos_locals_t* get_rcheevos_locals(void)
@@ -227,25 +240,24 @@ bool rcheevos_is_pause_allowed(void)
    return rc_client_can_pause(rcheevos_locals.client, NULL);
 }
 
-static void rcheevos_show_mastery_placard(void)
+static void rcheevos_show_completion_placard(const char* title, const char* badge_name)
 {
    const settings_t* settings = config_get_ptr();
    if (settings->bools.cheevos_visibility_mastery)
    {
-      const rc_client_game_t* game = rc_client_get_game_info(rcheevos_locals.client);
-      char title[256];
-      size_t _len = snprintf(title, sizeof(title),
+      char message[256];
+      size_t _len = snprintf(message, sizeof(message),
          msg_hash_to_str(rc_client_get_hardcore_enabled(rcheevos_locals.client)
             ? MSG_CHEEVOS_MASTERED_GAME
             : MSG_CHEEVOS_COMPLETED_GAME),
-         game->title);
-      title[sizeof(title) - 1] = '\0';
+         title);
+      message[sizeof(message) - 1] = '\0';
 
 #if defined (HAVE_GFX_WIDGETS)
       if (gfx_widgets_ready())
       {
          char msg[128];
-         char badge_name[32];
+         char badge[32];
          const char* displayname = rc_client_get_user_info(rcheevos_locals.client)->display_name;
          const bool content_runtime_log      = settings->bools.content_runtime_log;
          const bool content_runtime_log_aggr = settings->bools.content_runtime_log_aggregate;
@@ -268,7 +280,7 @@ static void rcheevos_show_mastery_placard(void)
                runtime_log_add_runtime_usec(runtime_log,
                   runloop_state->core_runtime_usec);
 
-               __len += strlcpy(msg + __len, " | ", sizeof(msg) - __len);
+               __len += strlcpy_lit(msg + __len, " | ", sizeof(msg) - __len);
                runtime_log_get_runtime_str(runtime_log, msg + __len, sizeof(msg) - __len);
                msg[sizeof(msg) - 1] = '\0';
 
@@ -276,9 +288,10 @@ static void rcheevos_show_mastery_placard(void)
             }
          }
 
-         __len = strlcpy(badge_name, "i", sizeof(badge_name));
-         strlcpy(badge_name + __len, game->badge_name, sizeof(badge_name) - __len);
-         gfx_widgets_push_achievement(title, msg, badge_name);
+         /* badge image = "iBADGENAME" */
+         badge[0] = 'i';
+         strlcpy(&badge[1], badge_name, sizeof(badge) - 1);
+         gfx_widgets_push_achievement(title, msg, badge);
       }
       else
 #endif
@@ -286,6 +299,108 @@ static void rcheevos_show_mastery_placard(void)
                MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_INFO);
    }
 }
+
+static void rcheevos_show_mastery_placard(void)
+{
+   const rc_client_game_t* game = rc_client_get_game_info(rcheevos_locals.client);
+   rcheevos_show_completion_placard(game->title, game->badge_name);
+}
+
+static void rcheevos_show_subset_completion_placard(const rc_client_subset_t* subset)
+{
+   char badge[32];
+   badge[0] = 'i';
+   strlcpy(&badge[1], subset->badge_name, sizeof(badge) - 1);
+   rcheevos_client_download_badge_from_url(subset->badge_url, badge);
+
+   rcheevos_show_completion_placard(subset->title, subset->badge_name);
+}
+
+#if defined(HAVE_GFX_WIDGETS)
+
+static void rcheevos_show_achievement_popup(const rc_client_achievement_t* cheevo, float rarity)
+{
+   char title[128], subtitle[96];
+
+   if (rarity >= 10.0)
+      snprintf(title, sizeof(title), "%s - %0.2f%%",
+         msg_hash_to_str(MSG_ACHIEVEMENT_UNLOCKED), rarity);
+   else if (rarity > 0.0)
+      snprintf(title, sizeof(title), "%s - %0.2f%%",
+         msg_hash_to_str(MSG_RARE_ACHIEVEMENT_UNLOCKED), rarity);
+   else
+      strlcpy(title,
+         msg_hash_to_str(MSG_ACHIEVEMENT_UNLOCKED), sizeof(title));
+
+   snprintf(subtitle, sizeof(subtitle), "%s (%lu)", cheevo->title, (unsigned long)cheevo->points);
+
+   gfx_widgets_push_achievement(title, subtitle, cheevo->badge_name);
+
+   /* if all badges haven't been loaded, preload the next one assuming it will be the next needed */
+   if (!rcheevos_locals.badges_loaded)
+   {
+      const rc_client_achievement_t* next_locked_achievement =
+         rc_client_get_next_achievement_info(rcheevos_locals.client, cheevo, RC_CLIENT_ACHIEVEMENT_BUCKET_LOCKED);
+      if (next_locked_achievement)
+         rcheevos_client_download_badge_from_url(next_locked_achievement->badge_url, next_locked_achievement->badge_name);
+   }
+}
+
+struct rcheevos_retry_achievement_info_t
+{
+   uint32_t achievement_id;
+   float rarity;
+   /* The badge file this retry is waiting for, built when the task is
+    * armed: the handler runs on the threaded task queue's worker, and
+    * checking a captured path is plain VFS where rebuilding it would
+    * read the config and the menu theme mid-wait. */
+   char badge_fullpath[PATH_MAX_LENGTH];
+};
+
+/* The task's callback: the main thread, at task retrieval. The popup
+ * measures text and starts a widget, which is the main thread's to do;
+ * the worker only decides when this runs. */
+static void rcheevos_retry_achievement_popup_cb(retro_task_t* task,
+      void* task_data, void* user_data, const char* error)
+{
+   struct rcheevos_retry_achievement_info_t* info =
+      (struct rcheevos_retry_achievement_info_t*)user_data;
+   const rc_client_achievement_t* cheevo;
+
+   (void)task_data;
+   (void)error;
+
+   if (!info)
+      return;
+
+   /* achievement gone means the game was unloaded: no popup */
+   if ((cheevo = rc_client_get_achievement_info(rcheevos_locals.client,
+         info->achievement_id)))
+      rcheevos_show_achievement_popup(cheevo, info->rarity);
+
+   task->user_data = NULL;
+   free(info);
+}
+
+static void rcheevos_retry_achievement_popup(retro_task_t* task)
+{
+   struct rcheevos_retry_achievement_info_t* info = (struct rcheevos_retry_achievement_info_t*)task->user_data;
+
+   if (task->progress <= 4 && !path_is_valid(info->badge_fullpath))
+   {
+      /* second retry in 200ms, third is 400ms, fourth in 800ms. if not available after 1500ms
+       * (100+200+400+800), then the callback shows the placeholder. */
+      task->progress <<= 1;
+      task->when = cpu_features_get_time_usec() + 100000 * task->progress; /* first retry in 100ms */
+      return;
+   }
+
+   /* badge is available now, or we've reached the retry limit: finish,
+    * and the callback shows the popup on the main thread. */
+   task_set_flags(task, RETRO_TASK_FLG_FINISHED, true);
+}
+
+#endif /* HAVE_GFX_WIDGETS */
 
 static void rcheevos_award_achievement(const rc_client_achievement_t* cheevo)
 {
@@ -300,23 +415,62 @@ static void rcheevos_award_achievement(const rc_client_achievement_t* cheevo)
 #if defined(HAVE_GFX_WIDGETS)
       if (gfx_widgets_ready())
       {
-         char title[128], subtitle[96];
          float rarity = rc_client_get_hardcore_enabled(rcheevos_locals.client) ?
             cheevo->rarity_hardcore : cheevo->rarity;
 
-         if (rarity >= 10.0)
-            snprintf(title, sizeof(title), "%s - %0.2f%%",
-               msg_hash_to_str(MSG_ACHIEVEMENT_UNLOCKED), rarity);
-         else if (rarity > 0.0)
-            snprintf(title, sizeof(title), "%s - %0.2f%%",
-               msg_hash_to_str(MSG_RARE_ACHIEVEMENT_UNLOCKED), rarity);
+         if (rcheevos_locals.badges_loaded || rcheevos_is_badge_available(cheevo->badge_name, false))
+         {
+            rcheevos_show_achievement_popup(cheevo, rarity);
+         }
          else
-            strlcpy(title,
-               msg_hash_to_str(MSG_ACHIEVEMENT_UNLOCKED), sizeof(title));
+         {
+            retro_task_t* task;
+            rcheevos_client_download_badge_from_url(cheevo->badge_url, cheevo->badge_name);
 
-         snprintf(subtitle, sizeof(subtitle), "%s (%lu)", cheevo->title, (unsigned long)cheevo->points);
+            task = task_init();
+            if (!task)
+            {
+               rcheevos_show_achievement_popup(cheevo, rarity);
+            }
+            else
+            {
+               struct rcheevos_retry_achievement_info_t* info;
+               /* NULL-check before dereferencing.  The previous code
+                * wrote info->achievement_id / info->rarity on the
+                * next two lines regardless, which would segfault on
+                * OOM.  Falling back to the immediate popup path
+                * matches the '!task' branch above, and we have to
+                * release the task we just allocated or we leak it. */
+               if (!(info = (struct rcheevos_retry_achievement_info_t*)malloc(sizeof(*info))))
+               {
+                  free(task);
+                  rcheevos_show_achievement_popup(cheevo, rarity);
+               }
+               else
+               {
+                  char badge_file[24];
 
-         gfx_widgets_push_achievement(title, subtitle, cheevo->badge_name);
+                  info->achievement_id = cheevo->id;
+                  info->rarity = rarity;
+                  rcheevos_get_local_badge_filename(badge_file,
+                        sizeof(badge_file), cheevo->badge_name, false);
+                  fill_pathname_application_special(info->badge_fullpath,
+                        sizeof(info->badge_fullpath),
+                        APPLICATION_SPECIAL_DIRECTORY_THUMBNAILS_CHEEVOS_BADGES);
+                  fill_pathname_join(info->badge_fullpath,
+                        info->badge_fullpath, badge_file,
+                        sizeof(info->badge_fullpath));
+
+                  task->handler = rcheevos_retry_achievement_popup;
+                  task->callback = rcheevos_retry_achievement_popup_cb;
+                  task->user_data = info;
+                  task->progress = 1;
+                  task->when = cpu_features_get_time_usec() + 100000; /* first retry in 100ms */
+
+                  task_queue_push(task);
+               }
+            }
+         }
       }
       else
 #endif
@@ -324,7 +478,7 @@ static void rcheevos_award_achievement(const rc_client_achievement_t* cheevo)
          char buffer[256];
          size_t _len = strlcpy(buffer, msg_hash_to_str(MSG_ACHIEVEMENT_UNLOCKED),
                sizeof(buffer));
-         _len += strlcpy(buffer + _len, ": ", sizeof(buffer) - _len);
+         _len += strlcpy_lit(buffer + _len, ": ", sizeof(buffer) - _len);
          _len += strlcpy(buffer + _len, cheevo->title, sizeof(buffer) - _len);
          runloop_msg_queue_push(buffer, _len, 0, 2 * 60, false, NULL,
             MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_INFO);
@@ -350,7 +504,6 @@ static void rcheevos_award_achievement(const rc_client_achievement_t* cheevo)
       if (shotname)
       {
          const char *path_directory_screenshot = settings->paths.directory_screenshot;
-         video_driver_state_t* video_st = video_state_get_ptr();;
          snprintf(shotname, shotname_len, "%s/%s-cheevo-%u",
             path_directory_screenshot,
             path_basename(path_get(RARCH_PATH_BASENAME)),
@@ -360,8 +513,7 @@ static void rcheevos_award_achievement(const rc_client_achievement_t* cheevo)
          if (take_screenshot(path_directory_screenshot,
             shotname,
             true,
-            video_st->frame_cache_data
-            && (video_st->frame_cache_data == RETRO_HW_FRAME_BUFFER_VALID),
+            video_driver_cached_frame_is_hw_render(),
             false,
             true))
             CHEEVOS_LOG(RCHEEVOS_TAG
@@ -390,14 +542,14 @@ static void rcheevos_lboard_submitted(const rc_client_leaderboard_t* lboard,
       {
          _len = snprintf(buffer, sizeof(buffer), msg_hash_to_str(MSG_LEADERBOARD_SUBMISSION),
             scoreboard->submitted_score, lboard->title);
-         _len += strlcpy(buffer + _len, " (", sizeof(buffer) - _len);
+         _len += strlcpy_lit(buffer + _len, " (", sizeof(buffer) - _len);
          if (strcmp(scoreboard->best_score, scoreboard->submitted_score) == 0)
             _len += snprintf(buffer + _len, sizeof(buffer) - _len,
                   msg_hash_to_str(MSG_LEADERBOARD_RANK), scoreboard->new_rank);
          else
             _len += snprintf(buffer + _len, sizeof(buffer) - _len,
                   msg_hash_to_str(MSG_LEADERBOARD_BEST), scoreboard->best_score);
-         _len += strlcpy(buffer + _len, ")", sizeof(buffer) - _len);
+         _len += strlcpy_lit(buffer + _len, ")", sizeof(buffer) - _len);
       }
       else
          _len = snprintf(buffer, sizeof(buffer), msg_hash_to_str(MSG_LEADERBOARD_SUBMISSION),
@@ -415,7 +567,7 @@ static void rcheevos_lboard_canceled(const rc_client_leaderboard_t* lboard)
    {
       char buffer[256];
       size_t _len = strlcpy(buffer, msg_hash_to_str(MSG_LEADERBOARD_FAILED), sizeof(buffer));
-      _len += strlcpy(buffer + _len, ": ", sizeof(buffer) - _len);
+      _len += strlcpy_lit(buffer + _len, ": ", sizeof(buffer) - _len);
       _len += strlcpy(buffer + _len, lboard->title, sizeof(buffer) - _len);
       runloop_msg_queue_push(buffer, _len, 0, 2 * 60, false, NULL,
          MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_INFO);
@@ -431,7 +583,7 @@ static void rcheevos_lboard_started(const rc_client_leaderboard_t* lboard)
       char buffer[256];
       size_t _len = strlcpy(buffer, msg_hash_to_str(MSG_LEADERBOARD_STARTED),
             sizeof(buffer));
-      _len += strlcpy(buffer + _len, ": ", sizeof(buffer) - _len);
+      _len += strlcpy_lit(buffer + _len, ": ", sizeof(buffer) - _len);
       _len += strlcpy(buffer + _len, lboard->title, sizeof(buffer) - _len);
       if (lboard->description && *lboard->description)
          _len += snprintf(buffer + _len, sizeof(buffer) - _len, "- %s",
@@ -498,7 +650,7 @@ static void rcheevos_server_error(const char* api_name, const char* message)
 {
    char buffer[256];
    size_t _len = strlcpy(buffer, api_name, sizeof(buffer));
-   _len += strlcpy(buffer + _len, " failed: ", sizeof(buffer) - _len);
+   _len += strlcpy_lit(buffer + _len, " failed: ", sizeof(buffer) - _len);
    _len += strlcpy(buffer + _len, message, sizeof(buffer) - _len);
    runloop_msg_queue_push(buffer, _len, 0, 4 * 60, false, NULL,
       MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_ERROR);
@@ -587,6 +739,9 @@ static void rcheevos_client_event_handler(const rc_client_event_t* event, rc_cli
       break;
    case RC_CLIENT_EVENT_GAME_COMPLETED:
       rcheevos_show_mastery_placard();
+      break;
+   case RC_CLIENT_EVENT_SUBSET_COMPLETED:
+      rcheevos_show_subset_completion_placard(event->subset);
       break;
    case RC_CLIENT_EVENT_SERVER_ERROR:
       rcheevos_server_error(event->server_error->api, event->server_error->error_message);
@@ -687,6 +842,17 @@ bool rcheevos_unload(void)
 {
    const bool was_loaded = rcheevos_is_game_loaded();
 
+#ifdef HAVE_THREADS
+   /* Bump the load generation FIRST, before any other state
+    * mutation. Any background load callback already in flight
+    * captured the previous generation at submit time; bumping
+    * here makes its eventual generation check fail, so it
+    * silently drops without writing FINALIZE_LOAD into
+    * queued_command. The atomic store synchronizes with the
+    * acquire-load on the bg thread. */
+   retro_atomic_inc_int(&rcheevos_locals.load_generation);
+#endif
+
 #ifdef HAVE_GFX_WIDGETS
    rcheevos_hide_widgets(gfx_widgets_ready());
    gfx_widget_set_cheevos_set_loading(false);
@@ -695,7 +861,8 @@ bool rcheevos_unload(void)
    rc_client_unload_game(rcheevos_locals.client);
 
 #ifdef HAVE_THREADS
-   rcheevos_locals.queued_command = CMD_EVENT_NONE;
+   retro_atomic_store_release_int(&rcheevos_locals.queued_command,
+         CMD_EVENT_NONE);
 #endif
 
    if (rcheevos_locals.memory.count > 0)
@@ -703,6 +870,8 @@ bool rcheevos_unload(void)
 
    if (was_loaded)
    {
+      rcheevos_locals.badges_loaded = rcheevos_locals.badges_loading = false;
+
 #ifdef HAVE_MENU
       rcheevos_menu_reset_badges();
 
@@ -717,7 +886,8 @@ bool rcheevos_unload(void)
    }
 
 #ifdef HAVE_THREADS
-   rcheevos_locals.queued_command = CMD_EVENT_NONE;
+   retro_atomic_store_release_int(&rcheevos_locals.queued_command,
+         CMD_EVENT_NONE);
 #endif
 
    if (!config_get_ptr()->arrays.cheevos_token[0])
@@ -800,7 +970,8 @@ static void rcheevos_toggle_hardcore_active(rcheevos_locals_t* locals)
             /* have to "schedule" this.
              * CMD_EVENT_REWIND_DEINIT should
              * only be called on the main thread */
-            rcheevos_locals.queued_command = CMD_EVENT_REWIND_DEINIT;
+            retro_atomic_store_release_int(&rcheevos_locals.queued_command,
+                  CMD_EVENT_REWIND_DEINIT);
          }
          else
 #endif
@@ -824,7 +995,8 @@ static void rcheevos_toggle_hardcore_active(rcheevos_locals_t* locals)
             /* have to "schedule" this.
              * CMD_EVENT_REWIND_INIT should
              * only be called on the main thread */
-            rcheevos_locals.queued_command = CMD_EVENT_REWIND_INIT;
+            retro_atomic_store_release_int(&rcheevos_locals.queued_command,
+                  CMD_EVENT_REWIND_INIT);
          }
          else
 #endif
@@ -995,14 +1167,23 @@ Test all the achievements (call once per frame).
 void rcheevos_test(void)
 {
 #ifdef HAVE_THREADS
-   if (rcheevos_locals.queued_command != CMD_EVENT_NONE)
+   /* Snapshot the queued command once with an acquire-load. The
+    * matching release-stores are at the writer sites in this file
+    * (rcheevos_unload, the rewind toggles, and the bg-thread
+    * finalize at the bottom of rcheevos_client_load_game_callback).
+    * Without the snapshot the three reads at the previous
+    * !=NONE / ==FINALIZE / dispatch sites could each see a
+    * different value if a writer fires between them. */
+   int cmd = retro_atomic_load_acquire_int(&rcheevos_locals.queued_command);
+   if (cmd != CMD_EVENT_NONE)
    {
-      if (rcheevos_locals.queued_command == CMD_CHEEVOS_FINALIZE_LOAD)
+      if (cmd == CMD_CHEEVOS_FINALIZE_LOAD)
          rcheevos_finalize_game_load_on_ui_thread();
       else
-         command_event(rcheevos_locals.queued_command, NULL);
+         command_event((enum event_command)cmd, NULL);
 
-      rcheevos_locals.queued_command = CMD_EVENT_NONE;
+      retro_atomic_store_release_int(&rcheevos_locals.queued_command,
+            CMD_EVENT_NONE);
    }
 #endif
 
@@ -1053,7 +1234,13 @@ bool rcheevos_get_support_cheevos(void)
 const char* rcheevos_get_hash(void)
 {
    const rc_client_game_t* game = rc_client_get_game_info(rcheevos_locals.client);
-   return game ? game->hash : msg_hash_to_str(MENU_ENUM_LABEL_VALUE_NOT_AVAILABLE);
+   if (game)
+      return game->hash;
+
+   if (rcheevos_locals.hash_error)
+      return rcheevos_locals.hash_error;
+
+   return msg_hash_to_str(MENU_ENUM_LABEL_VALUE_NOT_AVAILABLE);
 }
 
 /* hooks for rc_hash library */
@@ -1122,6 +1309,10 @@ static void* rc_hash_handle_chd_open_track(
       CHEEVOS_FREE(file);
       cdfs_close_track(cdfs_track); /* ASSERT: this free()s cdfs_track */
    }
+   else
+   {
+      rcheevos_locals.hash_error = "Could not open CHD file";
+   }
 
    return NULL;
 }
@@ -1182,6 +1373,7 @@ static void* rc_hash_handle_cd_open_track(
 
       return rc_hash_handle_chd_open_track(path, track);
 #else
+      rcheevos_locals.hash_error = "No CHD support";
       CHEEVOS_LOG(RCHEEVOS_TAG "Cannot generate hash from CHD without HAVE_CHD compile flag\n");
       return NULL;
 #endif
@@ -1240,6 +1432,8 @@ static void rcheevos_show_game_placard(void)
 
    if (summary.num_unsupported_achievements)
    {
+      rcheevos_locals.has_unsupported_achievements = true;
+
       if (_len < sizeof(msg) - 4)
       {
          msg[_len++] = ' ';
@@ -1268,9 +1462,8 @@ static void rcheevos_show_game_placard(void)
       if (gfx_widgets_ready())
       {
          char badge_name[32];
-         size_t __len = strlcpy(badge_name, "i", sizeof(badge_name));
-         strlcpy(badge_name + __len, game->badge_name,
-               sizeof(badge_name) - __len);
+         badge_name[0] = 'i';
+         strlcpy(&badge_name[1], game->badge_name, sizeof(badge_name) - 1);
          gfx_widgets_push_achievement(game->title, msg, badge_name);
       }
       else
@@ -1346,7 +1539,7 @@ static void rcheevos_client_login_callback(int result,
    {
       settings_t* settings = config_get_ptr();
       char msg[256];
-      size_t _len = strlcpy(msg, "RetroAchievements login failed: ",
+      size_t _len = strlcpy_lit(msg, "RetroAchievements login failed: ",
             sizeof(msg));
       _len += strlcpy(msg + _len, error_message, sizeof(msg) - _len);
       CHEEVOS_LOG(RCHEEVOS_TAG "%s\n", msg);
@@ -1389,6 +1582,14 @@ static void rcheevos_client_login_callback(int result,
          CHEEVOS_LOG(RCHEEVOS_TAG "Login did not return token\n");
       }
 
+#ifdef HAVE_MENU
+      {
+         char badge_name[32];
+         snprintf(badge_name, sizeof(badge_name), "u%u", rc_djb2(user->username));
+         rcheevos_client_expire_badge(badge_name, user->avatar_last_updated);
+      }
+#endif
+
       /* show notification (if enabled) */
       if (settings->bools.cheevos_visibility_account)
       {
@@ -1401,18 +1602,101 @@ static void rcheevos_client_login_callback(int result,
    }
 }
 
+#ifdef HAVE_THREADS
+
+void rcheevos_download_next_badge(retro_task_t* task)
+{
+   /* progress: 0 = unlocked images for achievements player hasn't earned
+    *           1 = locked images for achievements player hasn't earned
+    *           2 = unlocked images for achievements player has earned
+    */
+   const int bucket = (task->progress == 2) ? RC_CLIENT_ACHIEVEMENT_BUCKET_UNLOCKED : RC_CLIENT_ACHIEVEMENT_BUCKET_LOCKED;
+   const rc_client_achievement_t* first_locked_achievement =
+      rc_client_get_next_achievement_info(rcheevos_locals.client,
+      (const rc_client_achievement_t*)task->user_data, bucket);
+
+   while (first_locked_achievement)
+   {
+      bool result;
+
+      if (task->progress == 1)
+      {
+         char locked_name[24];
+         snprintf(locked_name, sizeof(locked_name), "%s_lock", first_locked_achievement->badge_name);
+         result = rcheevos_client_download_badge_from_url(first_locked_achievement->badge_locked_url, locked_name);
+      }
+      else
+      {
+         result = rcheevos_client_download_badge_from_url(first_locked_achievement->badge_url, first_locked_achievement->badge_name);
+      }
+
+      if (result)
+         break;
+
+      first_locked_achievement =
+         rc_client_get_next_achievement_info(rcheevos_locals.client, first_locked_achievement, bucket);
+   }
+
+   if (!first_locked_achievement)
+   {
+      if (task->progress == 2 || !rcheevos_is_game_loaded())
+      {
+         /* mark task as complete so it will get cleaned up */
+         task_set_flags(task, RETRO_TASK_FLG_FINISHED, true);
+         return;
+      }
+
+      task->user_data = NULL; /* restart list */
+      task->progress++;
+   }
+
+   /* wait 10 seconds, then download the next badge */
+   task->user_data = (void*)first_locked_achievement;
+   task->when = cpu_features_get_time_usec() + 10 * 1000000;
+}
+
+#endif
+
 static void rcheevos_finalize_game_load(rc_client_t* client)
 {
    settings_t* settings = config_get_ptr();
    bool want_badges     = settings->bools.cheevos_badges_enable;
 #if !defined(HAVE_GFX_WIDGETS)
-   /* Then badges are only needed for xmb and ozone menus */
+   /* Then badges are only needed for xmb, ozone, and rgui menus */
    want_badges          = want_badges &&
       (        string_is_equal(settings->arrays.menu_driver, "xmb")
-            || string_is_equal(settings->arrays.menu_driver, "ozone"));
+            || string_is_equal(settings->arrays.menu_driver, "ozone")
+            || string_is_equal(settings->arrays.menu_driver, "rgui"));
 #endif
-   if (want_badges)
-         rcheevos_client_download_achievement_badges(client);
+   if (want_badges) /* prefetch the game badge */
+   {
+      const rc_client_achievement_t* first_locked_achievement = NULL;
+      const rc_client_game_t* game = rc_client_get_game_info(client);
+      char badge[32];
+#ifdef HAVE_THREADS
+      retro_task_t* task;
+#endif
+
+      badge[0] = 'i';
+      strlcpy(&badge[1], game->badge_name, sizeof(badge) - 1);
+      rcheevos_client_download_badge_from_url(game->badge_url, badge);
+
+      /* predownload the first badge the player hasn't earned, assuming it will be the next to unlock */
+      first_locked_achievement = rc_client_get_next_achievement_info(client, NULL, RC_CLIENT_ACHIEVEMENT_BUCKET_LOCKED);
+      if (first_locked_achievement)
+         rcheevos_client_download_badge_from_url(first_locked_achievement->badge_url, first_locked_achievement->badge_name);
+
+#ifdef HAVE_THREADS
+      task = task_init();
+      if (task)
+      {
+         task->handler = rcheevos_download_next_badge;
+         task->user_data = (void*)first_locked_achievement;
+         task->when = cpu_features_get_time_usec() + 5*60*1000000; /* five minutes */
+         task_queue_push(task);
+      }
+#endif
+   }
 
    if (!rc_client_is_processing_required(client))
    {
@@ -1447,6 +1731,29 @@ static void rcheevos_client_load_game_callback(int result,
    const settings_t *settings   = config_get_ptr();
    const rc_client_game_t *game = rc_client_get_game_info(client);
 
+#ifdef HAVE_THREADS
+   /* Stale-load filter. The userdata is the load_generation
+    * captured at rc_client_begin_identify_and_load_game time;
+    * if it no longer matches, the user has unloaded or started
+    * a new load while this one was in flight, and any further
+    * mutation of rcheevos_locals here would target the new
+    * session's state.
+    *
+    * The check is HAVE_THREADS-gated because only the threaded
+    * code path captures a real generation as userdata; the
+    * single-threaded build passes NULL (which would compare
+    * against the initial generation 0 and either match-or-miss
+    * unpredictably as the counter wraps). */
+   if (!task_is_on_main_thread())
+   {
+      intptr_t captured_gen = (intptr_t)userdata;
+      int      current_gen  = retro_atomic_load_acquire_int(
+            &rcheevos_locals.load_generation);
+      if ((intptr_t)current_gen != captured_gen)
+         return;
+   }
+#endif
+
 #if defined(HAVE_GFX_WIDGETS)
    gfx_widget_set_cheevos_set_loading(false);
 #endif
@@ -1458,6 +1765,7 @@ static void rcheevos_client_load_game_callback(int result,
       {
          CHEEVOS_LOG(RCHEEVOS_TAG "Game not recognized, pausing hardcore\n");
          rcheevos_pause_hardcore();
+         rcheevos_locals.hash_error = "Unrecognized";
 
          if (!settings->bools.cheevos_verbose_enable)
             return;
@@ -1473,6 +1781,11 @@ static void rcheevos_client_load_game_callback(int result,
             error_message = "Unknown error";
 
          CHEEVOS_LOG(RCHEEVOS_TAG "Game load failed: %s\n", error_message);
+
+         if (rcheevos_locals.hash_error)
+            error_message = rcheevos_locals.hash_error;
+         else
+            rcheevos_locals.hash_error = rc_error_str(result);
 
          if (result == RC_LOGIN_REQUIRED)
          {
@@ -1532,7 +1845,22 @@ static void rcheevos_client_load_game_callback(int result,
    /* Have to "schedule" this. Game image should not be
     * loaded into memory on background thread */
    if (!task_is_on_main_thread())
-      rcheevos_locals.queued_command = (enum event_command)CMD_CHEEVOS_FINALIZE_LOAD;
+   {
+      /* Re-check the generation just before publishing.
+       * Between the entry check and here we ran a long
+       * sequence of work (potentially seconds with slow
+       * network or disk); the user may have unloaded or
+       * started a new load in that window. The captured
+       * generation is in userdata. */
+      intptr_t captured_gen = (intptr_t)userdata;
+      int      current_gen  = retro_atomic_load_acquire_int(
+            &rcheevos_locals.load_generation);
+      if ((intptr_t)current_gen != captured_gen)
+         return;
+
+      retro_atomic_store_release_int(&rcheevos_locals.queued_command,
+            CMD_CHEEVOS_FINALIZE_LOAD);
+   }
    else
 #endif
       rcheevos_finalize_game_load_on_ui_thread();
@@ -1551,7 +1879,16 @@ bool rcheevos_load(const void *data)
       && settings->bools.cheevos_enable;
 
 #ifdef HAVE_THREADS
-   rcheevos_locals.queued_command = CMD_EVENT_NONE;
+   /* Bump the load generation. Any background callback from a
+    * prior rc_client_begin_identify_and_load_game whose
+    * userdata-captured generation no longer matches will drop
+    * silently rather than writing FINALIZE_LOAD into
+    * queued_command and causing a stale finalize to be applied
+    * to the new game's state. See the matching comment in
+    * cheevos_locals.h. */
+   retro_atomic_inc_int(&rcheevos_locals.load_generation);
+   retro_atomic_store_release_int(&rcheevos_locals.queued_command,
+         CMD_EVENT_NONE);
 #endif
 
    /* If achievements are not enabled, or the core doesn't
@@ -1562,7 +1899,7 @@ bool rcheevos_load(const void *data)
       return false;
    }
 
-   if (string_is_empty(settings->arrays.cheevos_username))
+   if (!*settings->arrays.cheevos_username)
    {
       CHEEVOS_LOG(RCHEEVOS_TAG "Cannot login (no username)\n");
       runloop_msg_queue_push(
@@ -1605,6 +1942,8 @@ bool rcheevos_load(const void *data)
       rcheevos_client_download_placeholder_badge();
    }
 
+   rcheevos_locals.has_unsupported_achievements = false;
+   rcheevos_locals.hash_error = NULL;
    rc_client_set_hardcore_enabled(rcheevos_locals.client, settings->bools.cheevos_hardcore_mode_enable);
    rc_client_set_unofficial_enabled(rcheevos_locals.client, settings->bools.cheevos_test_unofficial);
    rc_client_set_encore_mode_enabled(rcheevos_locals.client, settings->bools.cheevos_start_active);
@@ -1664,8 +2003,41 @@ bool rcheevos_load(const void *data)
       }
 #endif
 
-      rc_client_begin_identify_and_load_game(rcheevos_locals.client, console_id,
-         info->path, (const uint8_t*)info->data, info->size, rcheevos_client_load_game_callback, NULL);
+      {
+#ifdef HAVE_THREADS
+         intptr_t gen;
+#endif
+         const uint8_t* data = (const uint8_t*)info->data;
+         size_t data_size = info->size;
+
+         if (data) {
+            const char* ext = path_get_extension(info->path);
+            if (string_is_equal_noncase(ext, "m3u") || string_is_equal_noncase(ext, "cue")) {
+               /* If the core doesn't specify needs_fullpath, the file will be loaded into
+                * memory. For m3u and cue files, we want to call the version of the hasher
+                * that reads files from disk, so pretend the data isn't loaded in memory. */
+               data = NULL;
+               data_size = 0;
+            }
+         }
+
+#ifdef HAVE_THREADS
+         /* Capture the current load generation; the callback
+          * compares this against the live value to detect a
+          * stale completion (i.e. the user closed/changed
+          * content while the load was in flight). The cast
+          * loses information only if HAVE_THREADS is enabled
+          * and a generation counter overflows intptr_t, which
+          * would require ~2^31 (or ~2^63) load events. */
+         gen = (intptr_t)retro_atomic_load_acquire_int(
+               &rcheevos_locals.load_generation);
+         rc_client_begin_identify_and_load_game(rcheevos_locals.client, console_id,
+            info->path, data, data_size, rcheevos_client_load_game_callback, (void*)gen);
+#else
+         rc_client_begin_identify_and_load_game(rcheevos_locals.client, console_id,
+            info->path, data, data_size, rcheevos_client_load_game_callback, NULL);
+#endif
+      }
    }
 
    return true;

@@ -45,18 +45,16 @@ void switch_ctx_destroy(void *data)
 }
 
 static void switch_ctx_get_video_size(void *data,
-      unsigned *width, unsigned *height)
+      unsigned *dims)
 {
    switch (appletGetOperationMode())
    {
       default:
       case AppletOperationMode_Handheld:
-         *width  = 1280;
-         *height = 720;
+         *dims = VIDEO_SCALE_PACK(1280, 720);
          break;
       case AppletOperationMode_Console:
-         *width  = 1920;
-         *height = 1080;
+         *dims = VIDEO_SCALE_PACK(1920, 1080);
          break;
    }
 }
@@ -115,20 +113,18 @@ error:
 }
 
 static void switch_ctx_check_window(void *data, bool *quit,
-      bool *resize, unsigned *width, unsigned *height)
+      bool *resize, unsigned *dims)
 {
-    unsigned new_width, new_height;
+    unsigned new_dims;
+    switch_ctx_get_video_size(data, &new_dims);
 
-    switch_ctx_get_video_size(data, &new_width, &new_height);
-
-    if (new_width != *width || new_height != *height)
-    {
-        *width = new_width;
-        *height = new_height;
+    if (new_dims != *dims)
+   {
+      *dims = new_dims;
         switch_ctx_data_t *ctx_nx = (switch_ctx_data_t *)data;
 
-        ctx_nx->width = *width;
-        ctx_nx->height = *height;
+        ctx_nx->width = VIDEO_SCALE_W(*dims);
+        ctx_nx->height = VIDEO_SCALE_H(*dims);
 
         ctx_nx->native_window.width = ctx_nx->width;
         ctx_nx->native_window.height = ctx_nx->height;
@@ -142,7 +138,7 @@ static void switch_ctx_check_window(void *data, bool *quit,
 }
 
 static bool switch_ctx_set_video_mode(void *data,
-      unsigned width, unsigned height,
+      unsigned dims,
       bool fullscreen)
 {
     /* Create an EGL rendering context */
@@ -152,9 +148,12 @@ static bool switch_ctx_set_video_mode(void *data,
             EGL_NONE};
 
     switch_ctx_data_t *ctx_nx = (switch_ctx_data_t *)data;
+    unsigned win_dims         = 0;
 
-    switch_ctx_get_video_size(data, &ctx_nx->width, &ctx_nx->height);
+    switch_ctx_get_video_size(data, &win_dims);
 
+    ctx_nx->width  = VIDEO_SCALE_W(win_dims);
+    ctx_nx->height = VIDEO_SCALE_H(win_dims);
     ctx_nx->native_window.width = ctx_nx->width;
     ctx_nx->native_window.height = ctx_nx->height;
 
@@ -238,9 +237,12 @@ static uint32_t switch_ctx_get_flags(void *data)
       BIT32_SET(flags, GFX_CTX_FLAGS_SHADERS_SLANG);
 #endif
    }
+   else
+   {
 #ifdef HAVE_GLSL
-   BIT32_SET(flags, GFX_CTX_FLAGS_SHADERS_GLSL);
+      BIT32_SET(flags, GFX_CTX_FLAGS_SHADERS_GLSL);
 #endif
+   }
 
     return flags;
 }
@@ -303,6 +305,26 @@ bool switch_ctx_get_metrics(void *data,
    return false;
 }
 
+static bool switch_ctx_create_surface(void *data)
+{
+#ifdef HAVE_EGL
+   switch_ctx_data_t *ctx_nx = (switch_ctx_data_t*)data;
+   return egl_create_surface(&ctx_nx->egl, ctx_nx->win);
+#else
+   return false;
+#endif
+}
+
+static bool switch_ctx_destroy_surface(void *data)
+{
+#ifdef HAVE_EGL
+   switch_ctx_data_t *ctx_nx = (switch_ctx_data_t*)data;
+   return egl_destroy_surface(&ctx_nx->egl);
+#else
+   return false;
+#endif
+}
+
 const gfx_ctx_driver_t switch_ctx = {
     switch_ctx_init,
     switch_ctx_destroy,
@@ -338,5 +360,7 @@ const gfx_ctx_driver_t switch_ctx = {
     switch_ctx_set_flags,
     switch_ctx_bind_hw_render,
     NULL,
-    NULL
+    NULL,
+    switch_ctx_create_surface,
+    switch_ctx_destroy_surface
 };

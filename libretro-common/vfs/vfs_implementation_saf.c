@@ -43,6 +43,8 @@ static jmethodID vfs_saf_saf_directory_close_method;
 static jmethodID vfs_saf_saf_directory_readdir_method;
 static jmethodID vfs_saf_saf_directory_get_dirent_name_method;
 static jmethodID vfs_saf_saf_directory_get_dirent_is_directory_method;
+static jmethodID vfs_saf_saf_directory_readdir_batch_method;
+static jmethodID vfs_saf_saf_directory_get_batch_is_directory_method;
 
 bool retro_vfs_init_saf(JNIEnv *(*get_jni_env)(void), jobject activity_object)
 {
@@ -54,6 +56,14 @@ bool retro_vfs_init_saf(JNIEnv *(*get_jni_env)(void), jobject activity_object)
    env = get_jni_env();
    if (env == NULL)
       return false;
+
+   (*env)->PushLocalFrame(env, 14);
+   if ((*env)->ExceptionOccurred(env))
+   {
+      (*env)->ExceptionDescribe(env);
+      (*env)->ExceptionClear(env);
+      return false;
+   }
 
    vfs_saf_content_resolver_object = NULL;
    vfs_saf_vfs_implementation_saf_class = NULL;
@@ -151,6 +161,12 @@ bool retro_vfs_init_saf(JNIEnv *(*get_jni_env)(void), jobject activity_object)
    if ((*env)->ExceptionOccurred(env)) goto error;
 
    vfs_saf_saf_directory_get_dirent_is_directory_method = (*env)->GetMethodID(env, vfs_saf_saf_directory_class, "getDirentIsDirectory", "()Z");
+   if ((*env)->ExceptionCheck(env)) goto error;
+
+   vfs_saf_saf_directory_readdir_batch_method = (*env)->GetMethodID(env, vfs_saf_saf_directory_class, "readdirBatch", "(I)[Ljava/lang/String;");
+   if ((*env)->ExceptionCheck(env)) goto error;
+
+   vfs_saf_saf_directory_get_batch_is_directory_method = (*env)->GetMethodID(env, vfs_saf_saf_directory_class, "getBatchIsDirectory", "()[Z");
    if ((*env)->ExceptionOccurred(env)) goto error;
 
    /*
@@ -172,6 +188,7 @@ bool retro_vfs_init_saf(JNIEnv *(*get_jni_env)(void), jobject activity_object)
    }
 
    vfs_saf_get_jni_env = get_jni_env;
+   (*env)->PopLocalFrame(env, NULL);
    return true;
 
 error:
@@ -201,6 +218,7 @@ error:
       vfs_saf_saf_directory_class = NULL;
       if ((*env)->ExceptionOccurred(env)) goto error;
    }
+   (*env)->PopLocalFrame(env, NULL);
    return false;
 }
 
@@ -363,6 +381,168 @@ char *retro_vfs_path_join_saf(const char *tree, const char *path)
    return serialized_path;
 }
 
+bool retro_vfs_path_split_content_saf(struct libretro_vfs_implementation_saf_path_split_result *out, const char *content_uri)
+{
+   const char *ptr;
+   char *tree;
+   char *path;
+
+   if (strncmp(content_uri, "content://", sizeof "content://" - 1) != 0)
+      return false;
+
+   /* Advance ptr to the first forward slash in the content URI after the content:// */
+   for (ptr = content_uri + (sizeof "content://" - 1); *ptr != 0 && *ptr != '/'; ++ptr);
+   if (*ptr == 0)
+      return false;
+
+   /* If the content URI does not contain a tree component, consider the entire content URI to be the tree and the path to be the root */
+   if (strncmp(ptr, "/tree/", sizeof "/tree/" - 1) != 0)
+   {
+      if ((tree = strdup(content_uri)) == NULL)
+         return false;
+      if ((path = strdup("/")) == NULL)
+      {
+         free(tree);
+         return false;
+      }
+   }
+   else
+   {
+      size_t tree_size;
+
+      /* Advance ptr to the next forward slash after /tree/ */
+      for (tree_size = 0, ptr += sizeof "/tree/" - 1; *ptr != 0 && *ptr != '/'; ++tree_size)
+      {
+         if (
+            *ptr == '%'
+               && (
+                  (ptr[1] >= '0' && ptr[1] <= '9')
+                     || (ptr[1] >= 'A' && ptr[1] <= 'F')
+                     || (ptr[1] >= 'a' && ptr[1] <= 'f')
+               ) && (
+                  (ptr[2] >= '0' && ptr[2] <= '9')
+                     || (ptr[2] >= 'A' && ptr[2] <= 'F')
+                     || (ptr[2] >= 'a' && ptr[2] <= 'f')
+               ) && (
+                  ptr[1] != '0'
+                     || ptr[2] != '0'
+               )
+         )
+            ptr += 3;
+         else
+            ++ptr;
+      }
+
+      /* If the content URI does not also contain a document component, consider the entire content URI to be the tree and the path to be the root */
+      if (*ptr == 0 || strncmp(ptr, "/document/", sizeof "/document/" - 1) != 0)
+      {
+         if ((tree = strdup(content_uri)) == NULL)
+            return false;
+         if ((path = strdup("/")) == NULL)
+         {
+            free(tree);
+            return false;
+         }
+      }
+      /* Otherwise, isolate the document component of the content URI as the path and use the rest of the content URI as the tree */
+      else
+      {
+         char *path_ptr;
+         size_t path_size;
+
+         if ((tree = (char *)malloc(ptr - content_uri + 1)) == NULL)
+            return false;
+         memcpy(tree, content_uri, ptr - content_uri);
+         tree[ptr - content_uri] = 0;
+
+         content_uri = ptr + (sizeof "/document/" - 1);
+         for (path_size = 0, ptr = content_uri; *ptr != 0 && *ptr != '/'; ++path_size)
+         {
+            if (
+               *ptr == '%'
+                  && (
+                     (ptr[1] >= '0' && ptr[1] <= '9')
+                        || (ptr[1] >= 'A' && ptr[1] <= 'F')
+                        || (ptr[1] >= 'a' && ptr[1] <= 'f')
+                  ) && (
+                     (ptr[2] >= '0' && ptr[2] <= '9')
+                        || (ptr[2] >= 'A' && ptr[2] <= 'F')
+                        || (ptr[2] >= 'a' && ptr[2] <= 'f')
+                  ) && (
+                     ptr[1] != '0'
+                        || ptr[2] != '0'
+                  )
+            )
+            {
+               ptr += 3;
+               if (path_size < tree_size)
+                  content_uri += 3;
+            }
+            else
+            {
+               ++ptr;
+               if (path_size < tree_size)
+                  ++content_uri;
+            }
+         }
+         if (path_size <= tree_size)
+            path_size = 0;
+         else
+            path_size -= tree_size;
+         if (*content_uri != '%' || content_uri[1] != '2' || (content_uri[2] != 'F' && content_uri[2] != 'f'))
+            ++path_size;
+         if ((path_ptr = path = (char *)malloc(path_size + 1)) == NULL)
+         {
+            free(tree);
+            return false;
+         }
+         if (*content_uri != '%' || content_uri[1] != '2' || (content_uri[2] != 'F' && content_uri[2] != 'f'))
+            *path_ptr++ = '/';
+         for (ptr = content_uri; *ptr != 0 && *ptr != '/';)
+         {
+            if (
+               *ptr == '%'
+                  && (
+                     (ptr[1] >= '0' && ptr[1] <= '9')
+                        || (ptr[1] >= 'A' && ptr[1] <= 'F')
+                        || (ptr[1] >= 'a' && ptr[1] <= 'f')
+                  ) && (
+                     (ptr[2] >= '0' && ptr[2] <= '9')
+                        || (ptr[2] >= 'A' && ptr[2] <= 'F')
+                        || (ptr[2] >= 'a' && ptr[2] <= 'f')
+                  ) && (
+                     ptr[1] != '0'
+                        || ptr[2] != '0'
+                  )
+            )
+            {
+               if (ptr[1] >= '0' && ptr[1] <= '9')
+                  *path_ptr = (ptr[1] - '0') << 4;
+               else if (ptr[1] >= 'A' && ptr[1] <= 'F')
+                  *path_ptr = (ptr[1] - ('A' - 10)) << 4;
+               else
+                  *path_ptr = (ptr[1] - ('a' - 10)) << 4;
+               if (ptr[2] >= '0' && ptr[2] <= '9')
+                  *path_ptr |= ptr[2] - '0';
+               else if (ptr[2] >= 'A' && ptr[2] <= 'F')
+                  *path_ptr |= ptr[2] - ('A' - 10);
+               else
+                  *path_ptr |= ptr[2] - ('a' - 10);
+               ++path_ptr;
+               ptr += 3;
+            }
+            else
+               *path_ptr++ = *ptr++;
+         }
+         *path_ptr = 0;
+      }
+   }
+
+   out->tree = tree;
+   out->path = path;
+   return true;
+}
+
 int retro_vfs_file_open_saf(const char *tree, const char *path, unsigned mode)
 {
    JNIEnv *env;
@@ -376,6 +556,14 @@ int retro_vfs_file_open_saf(const char *tree, const char *path, unsigned mode)
    if (env == NULL)
       return -1;
 
+   (*env)->PushLocalFrame(env, 2);
+   if ((*env)->ExceptionOccurred(env))
+   {
+      (*env)->ExceptionDescribe(env);
+      (*env)->ExceptionClear(env);
+      return -1;
+   }
+
    tree_object = (*env)->NewStringUTF(env, tree);
    if ((*env)->ExceptionOccurred(env)) goto error;
 
@@ -385,11 +573,13 @@ int retro_vfs_file_open_saf(const char *tree, const char *path, unsigned mode)
    fd = (*env)->CallStaticIntMethod(env, vfs_saf_vfs_implementation_saf_class, vfs_saf_open_saf_file_method, vfs_saf_content_resolver_object, tree_object, path_object, !!(mode & RETRO_VFS_FILE_ACCESS_READ), !!(mode & RETRO_VFS_FILE_ACCESS_WRITE), !(mode & RETRO_VFS_FILE_ACCESS_UPDATE_EXISTING));
    if ((*env)->ExceptionOccurred(env)) goto error;
 
+   (*env)->PopLocalFrame(env, NULL);
    return fd;
 
 error:
    (*env)->ExceptionDescribe(env);
    (*env)->ExceptionClear(env);
+   (*env)->PopLocalFrame(env, NULL);
    return -1;
 }
 
@@ -406,6 +596,14 @@ int retro_vfs_file_remove_saf(const char *tree, const char *path)
    if (env == NULL)
       return -1;
 
+   (*env)->PushLocalFrame(env, 2);
+   if ((*env)->ExceptionOccurred(env))
+   {
+      (*env)->ExceptionDescribe(env);
+      (*env)->ExceptionClear(env);
+      return -1;
+   }
+
    tree_object = (*env)->NewStringUTF(env, tree);
    if ((*env)->ExceptionOccurred(env)) goto error;
 
@@ -415,11 +613,13 @@ int retro_vfs_file_remove_saf(const char *tree, const char *path)
    ret = (*env)->CallStaticBooleanMethod(env, vfs_saf_vfs_implementation_saf_class, vfs_saf_remove_saf_file_method, vfs_saf_content_resolver_object, tree_object, path_object);
    if ((*env)->ExceptionOccurred(env)) goto error;
 
+   (*env)->PopLocalFrame(env, NULL);
    return ret ? 0 : -1;
 
 error:
    (*env)->ExceptionDescribe(env);
    (*env)->ExceptionClear(env);
+   (*env)->PopLocalFrame(env, NULL);
    return -1;
 }
 
@@ -428,7 +628,7 @@ int retro_vfs_file_rename_saf(const char *old_tree, const char *old_path, const 
    return -1;
 }
 
-int retro_vfs_stat_saf(const char *tree, const char *path, int32_t *size)
+int retro_vfs_stat_saf(const char *tree, const char *path, int64_t *size)
 {
    JNIEnv *env;
    jstring tree_object;
@@ -442,6 +642,14 @@ int retro_vfs_stat_saf(const char *tree, const char *path, int32_t *size)
    env = vfs_saf_get_jni_env();
    if (env == NULL)
       return 0;
+
+   (*env)->PushLocalFrame(env, 3);
+   if ((*env)->ExceptionOccurred(env))
+   {
+      (*env)->ExceptionDescribe(env);
+      (*env)->ExceptionClear(env);
+      return 0;
+   }
 
    tree_object = (*env)->NewStringUTF(env, tree);
    if ((*env)->ExceptionOccurred(env)) goto error;
@@ -457,27 +665,35 @@ int retro_vfs_stat_saf(const char *tree, const char *path, int32_t *size)
       saf_stat_size = (*env)->CallLongMethod(env, saf_stat, vfs_saf_saf_stat_get_size_method);
       if ((*env)->ExceptionOccurred(env)) goto error;
       if (saf_stat_size < 0)
+      {
+         (*env)->PopLocalFrame(env, NULL);
          return 0;
+      }
    }
    else
    {
       bool saf_stat_is_open = (*env)->CallBooleanMethod(env, saf_stat, vfs_saf_saf_stat_get_is_open_method);
       if ((*env)->ExceptionOccurred(env)) goto error;
       if (!saf_stat_is_open)
+      {
+         (*env)->PopLocalFrame(env, NULL);
          return 0;
+      }
    }
 
    saf_stat_is_directory = (*env)->CallBooleanMethod(env, saf_stat, vfs_saf_saf_stat_get_is_directory_method);
    if ((*env)->ExceptionOccurred(env)) goto error;
 
    if (size != NULL)
-      *size = saf_stat_size > INT32_MAX ? INT32_MAX : (int32_t)saf_stat_size;
+      *size = saf_stat_size > INT64_MAX ? INT64_MAX : (int64_t)saf_stat_size;
 
+   (*env)->PopLocalFrame(env, NULL);
    return saf_stat_is_directory ? RETRO_VFS_STAT_IS_VALID | RETRO_VFS_STAT_IS_DIRECTORY : RETRO_VFS_STAT_IS_VALID;
 
 error:
    (*env)->ExceptionDescribe(env);
    (*env)->ExceptionClear(env);
+   (*env)->PopLocalFrame(env, NULL);
    return 0;
 }
 
@@ -494,6 +710,14 @@ int retro_vfs_mkdir_saf(const char *tree, const char *dir)
    if (env == NULL)
       return -1;
 
+   (*env)->PushLocalFrame(env, 2);
+   if ((*env)->ExceptionOccurred(env))
+   {
+      (*env)->ExceptionDescribe(env);
+      (*env)->ExceptionClear(env);
+      return -1;
+   }
+
    tree_object = (*env)->NewStringUTF(env, tree);
    if ((*env)->ExceptionOccurred(env)) goto error;
 
@@ -503,11 +727,13 @@ int retro_vfs_mkdir_saf(const char *tree, const char *dir)
    ret = (*env)->CallStaticIntMethod(env, vfs_saf_vfs_implementation_saf_class, vfs_saf_mkdir_saf_method, vfs_saf_content_resolver_object, tree_object, path_object);
    if ((*env)->ExceptionOccurred(env)) goto error;
 
+   (*env)->PopLocalFrame(env, NULL);
    return ret;
 
 error:
    (*env)->ExceptionDescribe(env);
    (*env)->ExceptionClear(env);
+   (*env)->PopLocalFrame(env, NULL);
    return -1;
 }
 
@@ -524,9 +750,20 @@ libretro_vfs_implementation_saf_dir *retro_vfs_opendir_saf(const char *tree, con
    if (env == NULL)
       return NULL;
 
-   dirstream = (libretro_vfs_implementation_saf_dir *)malloc(sizeof *dirstream);
+   /* calloc, not malloc: the batch arrays must start empty so that a
+    * failure before the first fill cannot free garbage pointers. */
+   dirstream = (libretro_vfs_implementation_saf_dir *)calloc(1, sizeof *dirstream);
    if (dirstream == NULL)
       return NULL;
+
+   (*env)->PushLocalFrame(env, 2);
+   if ((*env)->ExceptionOccurred(env))
+   {
+      free(dirstream);
+      (*env)->ExceptionDescribe(env);
+      (*env)->ExceptionClear(env);
+      return NULL;
+   }
 
    tree_object = (*env)->NewStringUTF(env, tree);
    if ((*env)->ExceptionOccurred(env)) goto error;
@@ -540,24 +777,142 @@ libretro_vfs_implementation_saf_dir *retro_vfs_opendir_saf(const char *tree, con
    dirstream->directory_object = (*env)->NewGlobalRef(env, dirstream->directory_object);
    if ((*env)->ExceptionOccurred(env)) goto error;
 
-   dirstream->dirent_name_object = NULL;
-   dirstream->dirent_name = NULL;
+   dirstream->batch_count   = 0;
+   dirstream->batch_pos     = 0;
+   dirstream->exhausted     = false;
+   dirstream->dirent_name   = NULL;
    dirstream->dirent_is_dir = false;
+   (*env)->PopLocalFrame(env, NULL);
    return dirstream;
 
 error:
    free(dirstream);
    (*env)->ExceptionDescribe(env);
    (*env)->ExceptionClear(env);
+   (*env)->PopLocalFrame(env, NULL);
    return NULL;
+}
+
+static void saf_batch_release(libretro_vfs_implementation_saf_dir *dirstream)
+{
+   int i;
+
+   for (i = 0; i < dirstream->batch_count; i++)
+   {
+      free(dirstream->batch_name[i]);
+      dirstream->batch_name[i] = NULL;
+   }
+
+   dirstream->batch_count = 0;
+   dirstream->batch_pos   = 0;
+}
+
+/* Pull the next batch of entries across in two JNI calls and copy the
+ * names into native memory, so that stepping through them afterwards
+ * costs nothing. Returns false when the directory is exhausted. */
+static bool saf_batch_fill(JNIEnv *env,
+      libretro_vfs_implementation_saf_dir *dirstream)
+{
+   jobjectArray  names;
+   jbooleanArray flags;
+   jboolean     *flag_elems = NULL;
+   jsize         count;
+   jsize         i;
+   bool          ok         = false;
+
+   saf_batch_release(dirstream);
+
+   if (dirstream->exhausted)
+      return false;
+
+   if ((*env)->PushLocalFrame(env, 4) < 0)
+   {
+      if ((*env)->ExceptionCheck(env))
+      {
+         (*env)->ExceptionDescribe(env);
+         (*env)->ExceptionClear(env);
+      }
+      return false;
+   }
+
+   names = (jobjectArray)(*env)->CallObjectMethod(env,
+         dirstream->directory_object,
+         vfs_saf_saf_directory_readdir_batch_method,
+         (jint)RETRO_VFS_SAF_DIRENT_BATCH);
+   if ((*env)->ExceptionCheck(env) || !names)
+      goto done;
+
+   flags = (jbooleanArray)(*env)->CallObjectMethod(env,
+         dirstream->directory_object,
+         vfs_saf_saf_directory_get_batch_is_directory_method);
+   if ((*env)->ExceptionCheck(env) || !flags)
+      goto done;
+
+   count = (*env)->GetArrayLength(env, names);
+   if (count > RETRO_VFS_SAF_DIRENT_BATCH)
+      count = RETRO_VFS_SAF_DIRENT_BATCH;
+   if ((*env)->GetArrayLength(env, flags) < count)
+      goto done;
+
+   if (count == 0)
+   {
+      dirstream->exhausted = true;
+      ok                   = true;
+      goto done;
+   }
+
+   flag_elems = (*env)->GetBooleanArrayElements(env, flags, NULL);
+   if (!flag_elems)
+      goto done;
+
+   for (i = 0; i < count; i++)
+   {
+      jstring     jname = (jstring)(*env)->GetObjectArrayElement(env, names, i);
+      const char *cname;
+
+      if ((*env)->ExceptionCheck(env) || !jname)
+         break;
+
+      if ((cname = (*env)->GetStringUTFChars(env, jname, NULL)))
+      {
+         dirstream->batch_name[dirstream->batch_count] = strdup(cname);
+         (*env)->ReleaseStringUTFChars(env, jname, cname);
+
+         if (!dirstream->batch_name[dirstream->batch_count])
+         {
+            (*env)->DeleteLocalRef(env, jname);
+            break;
+         }
+
+         dirstream->batch_is_dir[dirstream->batch_count] =
+            (flag_elems[i] != JNI_FALSE);
+         dirstream->batch_count++;
+      }
+
+      (*env)->DeleteLocalRef(env, jname);
+   }
+
+   (*env)->ReleaseBooleanArrayElements(env, flags, flag_elems, JNI_ABORT);
+
+   /* A short batch means the cursor ran dry; do not ask again. */
+   if (count < RETRO_VFS_SAF_DIRENT_BATCH)
+      dirstream->exhausted = true;
+
+   ok = (dirstream->batch_count > 0);
+
+done:
+   if ((*env)->ExceptionCheck(env))
+   {
+      (*env)->ExceptionDescribe(env);
+      (*env)->ExceptionClear(env);
+   }
+   (*env)->PopLocalFrame(env, NULL);
+   return ok;
 }
 
 bool retro_vfs_readdir_saf(libretro_vfs_implementation_saf_dir *dirstream)
 {
    JNIEnv *env;
-   bool ret;
-   jobject dirent_name_object;
-   const char *dirent_name;
 
    if (vfs_saf_get_jni_env == NULL)
       return false;
@@ -565,61 +920,28 @@ bool retro_vfs_readdir_saf(libretro_vfs_implementation_saf_dir *dirstream)
    if (env == NULL)
       return false;
 
-   ret = (*env)->CallBooleanMethod(env, dirstream->directory_object, vfs_saf_saf_directory_readdir_method);
-   if ((*env)->ExceptionOccurred(env)) goto error;
-
-   if (dirstream->dirent_name != NULL)
+   if (dirstream->batch_pos >= dirstream->batch_count)
    {
-      (*env)->ReleaseStringUTFChars(env, dirstream->dirent_name_object, dirstream->dirent_name);
-      if ((*env)->ExceptionOccurred(env)) goto error;
-      dirstream->dirent_name = NULL;
-   }
-   if (dirstream->dirent_name_object != NULL)
-   {
-      (*env)->DeleteGlobalRef(env, dirstream->dirent_name_object);
-      if ((*env)->ExceptionOccurred(env)) goto error;
-      dirstream->dirent_name_object = NULL;
+      if (!saf_batch_fill(env, dirstream))
+      {
+         dirstream->dirent_name   = NULL;
+         dirstream->dirent_is_dir = false;
+         return false;
+      }
    }
 
-   if (!ret)
+   if (dirstream->batch_pos >= dirstream->batch_count)
    {
+      dirstream->dirent_name   = NULL;
       dirstream->dirent_is_dir = false;
       return false;
    }
 
-   dirstream->dirent_is_dir = (*env)->CallBooleanMethod(env, dirstream->directory_object, vfs_saf_saf_directory_get_dirent_is_directory_method);
-   if ((*env)->ExceptionOccurred(env)) goto error;
-
-   dirent_name_object = (*env)->CallObjectMethod(env, dirstream->directory_object, vfs_saf_saf_directory_get_dirent_name_method);
-   if ((*env)->ExceptionOccurred(env)) goto error;
-
-   dirent_name_object = (*env)->NewGlobalRef(env, dirent_name_object);
-   if ((*env)->ExceptionOccurred(env)) goto error;
-   dirstream->dirent_name_object = dirent_name_object;
-
-   dirent_name = (*env)->GetStringUTFChars(env, (jstring)dirstream->dirent_name_object, NULL);
-   if ((*env)->ExceptionOccurred(env)) goto error;
-   dirstream->dirent_name = dirent_name;
+   dirstream->dirent_name   = dirstream->batch_name[dirstream->batch_pos];
+   dirstream->dirent_is_dir = dirstream->batch_is_dir[dirstream->batch_pos];
+   dirstream->batch_pos++;
 
    return true;
-
-error:
-   (*env)->ExceptionDescribe(env);
-   (*env)->ExceptionClear(env);
-   if (dirstream->dirent_name != NULL)
-   {
-      (*env)->ReleaseStringUTFChars(env, dirstream->dirent_name_object, dirstream->dirent_name);
-      dirstream->dirent_name = NULL;
-      if ((*env)->ExceptionOccurred(env)) goto error;
-   }
-   if (dirstream->dirent_name_object != NULL)
-   {
-      (*env)->DeleteGlobalRef(env, dirstream->dirent_name_object);
-      dirstream->dirent_name_object = NULL;
-      if ((*env)->ExceptionOccurred(env)) goto error;
-   }
-   dirstream->dirent_is_dir = false;
-   return false;
 }
 
 const char *retro_vfs_dirent_get_name_saf(libretro_vfs_implementation_saf_dir *dirstream)
@@ -645,24 +967,9 @@ int retro_vfs_closedir_saf(libretro_vfs_implementation_saf_dir *dirstream)
    if (env == NULL)
       return -1;
 
-   if (dirstream->dirent_name != NULL)
-   {
-      (*env)->ReleaseStringUTFChars(env, dirstream->dirent_name_object, dirstream->dirent_name);
-      if ((*env)->ExceptionOccurred(env))
-      {
-         (*env)->ExceptionDescribe(env);
-         (*env)->ExceptionClear(env);
-      }
-   }
-   if (dirstream->dirent_name_object != NULL)
-   {
-      (*env)->DeleteGlobalRef(env, dirstream->dirent_name_object);
-      if ((*env)->ExceptionOccurred(env))
-      {
-         (*env)->ExceptionDescribe(env);
-         (*env)->ExceptionClear(env);
-      }
-   }
+   saf_batch_release(dirstream);
+   dirstream->dirent_name   = NULL;
+   dirstream->dirent_is_dir = false;
 
    (*env)->CallVoidMethod(env, dirstream->directory_object, vfs_saf_saf_directory_close_method);
    if ((*env)->ExceptionOccurred(env))

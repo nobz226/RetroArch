@@ -24,6 +24,7 @@
 
 #include <boolean.h>
 #include <retro_common_api.h>
+#include <retro_atomic.h>
 #include <retro_inline.h>
 #include <libretro.h>
 #include <retro_miscellaneous.h>
@@ -31,10 +32,6 @@
 #ifdef HAVE_CONFIG_H
 #include "../config.h"
 #endif /* HAVE_CONFIG_H */
-
-#if defined(_WIN32) && !defined(SOCKET)
-#include <winsock2.h>
-#endif
 
 #include "input_defines.h"
 #include "input_types.h"
@@ -100,7 +97,7 @@
 #define DEFAULT_MAX_PADS 4
 #elif defined(DINGUX)
 #define DEFAULT_MAX_PADS 2
-#elif defined(EMSCRIPTEN)
+#elif defined(__EMSCRIPTEN__)
 #define DEFAULT_MAX_PADS 4
 #else
 #define DEFAULT_MAX_PADS 16
@@ -191,7 +188,19 @@ enum input_driver_state_flags
    INP_FLAG_DEFERRED_WAIT_KEYS       = (1 << 8),
    INP_FLAG_WAIT_INPUT_RELEASE       = (1 << 9),
    INP_FLAG_MENU_PRESS_PENDING       = (1 << 10),
-   INP_FLAG_MENU_PRESS_CANCEL        = (1 << 11)
+   INP_FLAG_MENU_PRESS_CANCEL        = (1 << 11),
+   /* A system-provided keyboard panel is on screen and owns text
+    * entry. Set and cleared by whichever input driver put it there,
+    * once per poll; read through input_osk_native_active(). */
+   INP_FLAG_NATIVE_KB_SHOWN          = (1 << 12),
+   /* This device has a native keyboard panel the frontend could use
+    * in place of the built-in OSK. Published the same way; read
+    * through input_osk_native_available(). */
+   INP_FLAG_NATIVE_KB_AVAIL          = (1 << 13),
+   /* Background controller input is off and the window is not
+    * focused: the joypad read paths see an idle controller. Set once
+    * per poll; read through input_driver_joypad_for_read(). */
+   INP_FLAG_JOYPAD_UNFOCUSED         = (1 << 14)
 };
 
 #ifdef HAVE_BSV_MOVIE
@@ -318,6 +327,7 @@ struct input_keyboard_line
    input_keyboard_line_complete_t cb;
    size_t ptr;
    size_t size;
+   size_t capacity;  /* Allocated size of buffer (excluding NUL) */
    bool enabled;
 };
 
@@ -350,22 +360,22 @@ struct remote_message
    uint16_t state;
 };
 
-struct input_remote
-{
-#if defined(HAVE_NETWORKING) && defined(HAVE_NETWORKGAMEPAD)
-#ifdef _WIN32
-   SOCKET net_fd[MAX_USERS];
-#else
-   int net_fd[MAX_USERS];
-#endif
-#endif
-   bool state[RARCH_BIND_LIST_END];
-};
-
 typedef struct
 {
    char display_name[NAME_MAX_LENGTH];
 } input_mouse_info_t;
+
+typedef struct
+{
+   int8_t source; /* RETRO_SENSOR_* ID to read from (0-5), -1 = unmapped */
+   int8_t sign;   /* +1 or -1 */
+} input_sensor_axis_t;
+
+typedef struct
+{
+   /* indexed by RETRO_SENSOR_ACCELEROMETER_X..RETRO_SENSOR_GYROSCOPE_Z */
+   input_sensor_axis_t axes[6];
+} input_sensor_map_t;
 
 typedef struct input_remote input_remote_t;
 
@@ -574,11 +584,6 @@ struct input_keyboard_ctx_wait
 
 typedef struct
 {
-   /**
-    * Array of timers, one for each entry in enum input_combo_type.
-    */
-   rarch_timer_t combo_timers[INPUT_COMBO_LAST];
-
 #if defined(HAVE_NETWORKING) && defined(HAVE_NETWORKGAMEPAD)
    input_remote_state_t remote_st_ptr;        /* uint64_t alignment */
 #endif
@@ -596,6 +601,12 @@ typedef struct
    const input_device_driver_t   *secondary_joypad;      /* ptr alignment */
    const retro_keybind_set *libretro_input_binds[MAX_USERS];
 #ifdef HAVE_COMMAND
+   /* Bumped whenever the command interfaces below are torn down. A
+    * command that reinitialises the input driver - LOAD_CONTENT,
+    * DRIVERS_REINIT - frees the very object whose poll dispatched it;
+    * the dispatcher compares this before and after and stops when it
+    * has changed rather than touch that object again. */
+   unsigned command_generation;
    command_t *command[MAX_CMD_DRIVERS];
 #endif
 #ifdef HAVE_BSV_MOVIE
@@ -613,6 +624,14 @@ typedef struct
    int old_touch_index_lut[OVERLAY_MAX_TOUCH];
 #endif
    uint16_t flags;
+   /* Read and written every poll; kept beside flags so the per-poll
+    * bookkeeping shares a cacheline with the hot pointer block above,
+    * rather than sitting past the input_device_info string tables
+    * (~17 KB of cold data) as it used to. */
+   unsigned input_hotkey_block_counter;
+#ifdef HAVE_ACCESSIBILITY
+   unsigned gamepad_input_override;
+#endif
 #ifdef HAVE_NETWORKGAMEPAD
    input_remote_t *remote;
 #endif
@@ -623,18 +642,28 @@ typedef struct
 #endif
 #endif
    int osk_ptr;
+   bool osk_textbox_focus;
    turbo_buttons_t turbo_btns; /* int32_t alignment */
+   hold_buttons_t hold_btns;   /* int32_t alignment */
 
    input_mapper_t mapper;          /* uint32_t alignment */
    input_remap_cache_t remapping_cache;
    input_device_info_t input_device_info[MAX_INPUT_DEVICES]; /* unsigned alignment */
    input_mouse_info_t input_mouse_info[MAX_INPUT_DEVICES];
+   input_sensor_map_t input_sensor_map[MAX_INPUT_DEVICES];
+
+   /**
+    * Array of timers, one for each entry in enum input_combo_type.
+    * One indexed entry is read per frame, and only while a button
+    * combo is bound; cold enough that it has no business occupying
+    * the first six cachelines of this struct, which it used to.
+    * (rarch_timer_t is int64-aligned; the compiler pads as needed
+    * here, which costs at most 4 bytes.)
+    */
+   rarch_timer_t combo_timers[INPUT_COMBO_LAST];
+
    unsigned osk_last_codepoint;
    unsigned osk_last_codepoint_len;
-   unsigned input_hotkey_block_counter;
-#ifdef HAVE_ACCESSIBILITY
-   unsigned gamepad_input_override;
-#endif
 
    enum osk_type osk_idx;
 
@@ -644,10 +673,78 @@ typedef struct
 
    /* primitives */
    bool analog_requested[MAX_USERS];
+
+   /* Per-port joypad state bitmask cache.
+    * Populated lazily on the first JOYPAD query for each mapped_port
+    * within a frame, then reused for subsequent individual button
+    * queries to the same port.  Avoids up to 32 indirect
+    * joypad->button()/axis() calls per port when cores use the
+    * old per-button query pattern instead of JOYPAD_MASK.
+    * Invalidated at the start of each input_driver_poll(). */
+   int32_t joypad_state_cache[MAX_USERS];
+
+   /* Per-port set of RetroPad buttons (bits 0..RARCH_FIRST_CUSTOM_BIND-1)
+    * that INP_FLAG_WAIT_INPUT_RELEASE is still waiting on.  Captured
+    * from whatever is held on the frame the wait is armed and pruned
+    * as those buttons are released; a button pressed after the wait
+    * was armed is never in the set, so it is delivered normally.
+    * While the flag is clear it simply tracks what is held, so a wait
+    * armed outside input_keys_pressed() starts from the previous
+    * frame's held set. */
+   uint16_t wait_release_mask[MAX_USERS];
+   bool    joypad_state_cache_valid[MAX_USERS];
+
    retro_bits_512_t keyboard_mapping_bits;    /* bool alignment */
    input_game_focus_state_t game_focus_state; /* bool alignment */
+
+   /* Cached sensor values — written once per frame in input_driver_poll()
+    * on the main thread, read by shader backends on the video thread.
+    * Not formally synchronized; relies on single-writer/single-reader
+    * float stores being practically atomic on ARM/x86. Worst case is
+    * a single stale frame of sensor data. */
+   float sensor_gyroscope_cache[3];
+   float sensor_accelerometer_cache[3];
+
+   /* Accelerometer rest position capture state.
+    * Same thread-safety model as the caches above:
+    * written on the main thread, read by shader backends
+    * on the video thread. */
+   float sensor_accelerometer_rest[3];
+   float rest_accum[3];
+   unsigned rest_sample_count;
+   bool rest_capturing;
+   /* Set from the shader backends' pass builders (video thread under
+    * the threaded wrapper) through
+    * input_driver_set_shader_uses_sensors(), read by the poll's
+    * demand check on the main thread: atomic with release/acquire,
+    * not a plain bool. */
+   retro_atomic_int_t shader_uses_sensors;
+   /* Seqlock publication of the sensor caches below - poll computes
+    * the caches, then publishes gyro, accelerometer and rest (nine
+    * floats as bits) here for the shader backends' per-frame reads
+    * from the video thread. */
+   retro_atomic_int_t sensor_snap_seq;
+   retro_atomic_int_t sensor_snap_bits[9];
+   bool frontend_sensors_enabled;
+   unsigned core_accel_rate; /* >0 means core wants accel at this rate */
+   unsigned core_gyro_rate;  /* >0 means core wants gyro at this rate */
 } input_driver_state_t;
 
+
+/**
+ * input_driver_joypad_for_read:
+ * @drv                      : primary or secondary joypad driver, or NULL.
+ *
+ * The joypad driver to read controller state from. While background
+ * controller input is off and RetroArch is unfocused this is a stand-in
+ * that reports every button released and every axis centred, so the
+ * menu, hotkeys and the core all see an idle controller. Rumble,
+ * sensors, device names and driver lifetime keep using @drv directly.
+ *
+ * Returns: @drv, or the idle stand-in; NULL if @drv is NULL.
+ **/
+const input_device_driver_t *input_driver_joypad_for_read(
+      const input_device_driver_t *drv);
 
 void input_driver_init_joypads(void);
 
@@ -703,6 +800,17 @@ bool input_driver_set_rumble_gain(
  *
  * @return true if the sensor state has been successfully set
  **/
+/* Release-stores the shader-demand latch; callable from the shader
+ * backends on the video thread. */
+void input_driver_set_shader_uses_sensors(bool uses);
+
+/* Seqlock read of the poll-published sensor snapshot: gyroscope,
+ * accelerometer and accelerometer-rest vec3s, coherent as a set.
+ * For the shader backends' per-frame uniform uploads on the video
+ * thread; converges immediately on the main thread. */
+void input_driver_read_sensor_snapshot(float *gyro3,
+      float *accel3, float *rest3);
+
 bool input_driver_set_sensor(
          unsigned port, bool sensors_enable,
          enum retro_sensor_action action, unsigned rate);
@@ -852,6 +960,20 @@ void input_config_set_device_config_name(unsigned port, const char *name);
 void input_config_set_device_joypad_driver(unsigned port, const char *driver);
 
 /**
+ * Set the physical location of the device in the specified port
+ *
+ * A NULL or empty location clears the stored one, so that a port
+ * whose device reports no location cannot inherit the location of
+ * whatever occupied it before.
+ *
+ * @param port
+ * The port of the device to be assigned to
+ * @param phys
+ * The physical location to set the given port to.
+ */
+void input_config_set_device_phys(unsigned port, const char *phys);
+
+/**
  * Set the vendor ID (vid) for the device in the specified port
  *
  * @param port
@@ -909,6 +1031,21 @@ void input_config_clear_device_joypad_driver(unsigned port);
 
 unsigned input_config_get_device_count(void);
 
+/**
+ * input_config_sanitize_joypad_indices:
+ *
+ * Restores the invariant that settings->uints.input_joypad_index[]
+ * is a permutation of [0, MAX_USERS): every player maps to a distinct
+ * pad index, and every entry is in range.
+ *
+ * Entries are examined in ascending player order and the first
+ * claimant of an index keeps it, so repairing a duplicate never takes
+ * a pad away from a lower numbered player.
+ *
+ * Returns true if the mapping had to be corrected.
+ **/
+bool input_config_sanitize_joypad_indices(void);
+
 unsigned *input_config_get_device_ptr(unsigned port);
 
 unsigned input_config_get_device(unsigned port);
@@ -919,6 +1056,7 @@ const char *input_config_get_device_display_name(unsigned port);
 const char *input_config_get_mouse_display_name(unsigned port);
 const char *input_config_get_device_config_name(unsigned port);
 const char *input_config_get_device_joypad_driver(unsigned port);
+const char *input_config_get_device_phys(unsigned port);
 
 /**
  * Retrieves the vendor id (vid) of a connected controller
@@ -1012,6 +1150,30 @@ void input_keyboard_line_append(
 void input_keyboard_line_clear(input_driver_state_t *input_st);
 void input_keyboard_line_free(input_driver_state_t *input_st);
 
+#ifdef ANDROID
+/**
+ * android_keyboard_start:
+ * @buffer_ptr               : Pointer to the keyboard line buffer.
+ * @size_ptr                 : Pointer to the keyboard line size.
+ * @ptr_ptr                  : Pointer to the keyboard line cursor.
+ * @label                    : Hint shown on the keyboard, or NULL.
+ * @cb                       : Line complete callback function.
+ * @userdata                 : Userdata passed to the callback.
+ *
+ * Raises the native Android (IME) keyboard for menu text entry, made to
+ * mirror the iOS ios_keyboard_* hooks. Swaps the custom on-screen keyboard
+ * for the system soft keyboard, enabling paste and password managers.
+ * Implemented in input/drivers/android_input.c.
+ *
+ * Returns: true if the keyboard was shown.
+ **/
+bool android_keyboard_start(char **buffer_ptr, size_t *size_ptr,
+      size_t *ptr_ptr, const char *label,
+      input_keyboard_line_complete_t cb, void *userdata);
+bool android_keyboard_active(void);
+void android_keyboard_end(void);
+#endif
+
 /**
  * input_keyboard_start_line:
  * @userdata                 : Userdata.
@@ -1051,17 +1213,21 @@ void input_game_focus_free(void);
  */
 size_t input_config_get_bind_string(void *settings_data,
       char *s, const struct retro_keybind *bind,
-      const struct retro_keybind *auto_bind, size_t len);
+      const struct retro_keybind *auto_bind,
+      const struct input_bind_label *label,
+      const struct input_bind_label *auto_label, size_t len);
 
 size_t input_config_get_bind_string_joyaxis(
       bool input_descriptor_label_show,
       char *s, const char *prefix,
-      const struct retro_keybind *bind, size_t len);
+      const struct retro_keybind *bind,
+      const struct input_bind_label *label, size_t len);
 
 size_t input_config_get_bind_string_joykey(
       bool input_descriptor_label_show,
       char *s, const char *prefix,
-      const struct retro_keybind *bind, size_t len);
+      const struct retro_keybind *bind,
+      const struct input_bind_label *label, size_t len);
 
 bool input_key_pressed(int key, bool keyboard_pressed);
 
@@ -1072,14 +1238,23 @@ bool input_set_rumble_gain(unsigned gain);
 
 float input_get_sensor_state(unsigned port, unsigned id);
 
+void input_sensor_start_rest_capture(void);
+
 bool input_set_sensor_state(unsigned port,
       enum retro_sensor_action action, unsigned rate);
+
+/* Core-facing sensor callbacks that track core enable/disable state */
+bool input_core_set_sensor_state(unsigned port,
+      enum retro_sensor_action action, unsigned rate);
+float input_core_get_sensor_state(unsigned port, unsigned id);
 
 void *input_driver_init_wrap(input_driver_t *input, const char *name);
 
 const struct retro_keybind *input_config_get_bind_auto(unsigned port, unsigned id);
 
 void input_config_reset_autoconfig_binds(unsigned port);
+
+const input_sensor_map_t *input_config_get_sensor_map(unsigned port);
 
 void input_config_reset(void);
 
@@ -1088,6 +1263,9 @@ const char *joypad_driver_name(unsigned i);
 void joypad_driver_reinit(void *data, const char *joypad_driver_name);
 
 #ifdef HAVE_COMMAND
+/* See command_generation in input_driver_state_t. */
+unsigned input_driver_command_generation(void);
+
 void input_driver_init_command(
       input_driver_state_t *input_st,
       settings_t *settings);
@@ -1120,6 +1298,10 @@ bool movie_skip_to_prev_checkpoint(input_driver_state_t *input_st);
 bool movie_skip_to_next_checkpoint(input_driver_state_t *input_st);
 bool movie_seek_to_frame(input_driver_state_t *input_st, int64_t frame);
 bool movie_start_playback(input_driver_state_t *input_st, char *path);
+
+/* True while a playback-start task is pending, i.e. until its
+ * callback has installed the replay handle. */
+bool movie_playback_start_in_progress(void *data);
 bool movie_start_record(input_driver_state_t *input_st, char *path);
 bool movie_stop_playback(input_driver_state_t *input_st);
 bool movie_stop_record(input_driver_state_t *input_st);
@@ -1179,7 +1361,9 @@ extern hid_driver_t *hid_drivers[];
 #endif
 
 extern input_driver_t input_android;
-extern input_driver_t input_sdl;
+extern input_driver_t input_sdl1;
+extern input_driver_t input_sdl2;
+extern input_driver_t input_sdl3;
 extern input_driver_t input_sdl_dingux;
 extern input_driver_t input_dinput;
 extern input_driver_t input_x;
@@ -1209,8 +1393,10 @@ extern input_device_driver_t linuxraw_joypad;
 extern input_device_driver_t parport_joypad;
 extern input_device_driver_t udev_joypad;
 extern input_device_driver_t xinput_joypad;
-extern input_device_driver_t sdl_joypad;
+extern input_device_driver_t sdl1_joypad; /** SDL1. @see sdl1_joypad.c */
+extern input_device_driver_t sdl2_joypad; /** SDL2. @see sdl2_joypad.c */
 extern input_device_driver_t sdl_dingux_joypad;
+extern input_device_driver_t sdl3_joypad; /** SDL3. @see sdl3_joypad.c */
 extern input_device_driver_t ps4_joypad;
 extern input_device_driver_t ps3_joypad;
 extern input_device_driver_t psp_joypad;
@@ -1226,6 +1412,7 @@ extern input_device_driver_t qnx_joypad;
 extern input_device_driver_t mfi_joypad;
 extern input_device_driver_t dos_joypad;
 extern input_device_driver_t rwebpad_joypad;
+extern input_device_driver_t winraw_joypad;
 extern input_device_driver_t test_joypad;
 
 #ifdef HAVE_HID
@@ -1238,6 +1425,8 @@ extern hid_driver_t wiiu_hid;
 
 extern retro_keybind_set input_config_binds[MAX_USERS];
 extern retro_keybind_set input_autoconf_binds[MAX_USERS];
+extern input_bind_label_set input_config_bind_labels[MAX_USERS];
+extern input_bind_label_set input_autoconf_bind_labels[MAX_USERS];
 
 RETRO_END_DECLS
 

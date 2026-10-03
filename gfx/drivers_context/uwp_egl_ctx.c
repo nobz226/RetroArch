@@ -138,16 +138,17 @@ static bool gfx_ctx_uwp_set_resize(void *data,
       unsigned width, unsigned height) { return false; }
 
 static void gfx_ctx_uwp_get_video_size(void *data,
-      unsigned *width, unsigned *height)
+      unsigned *dims)
 {
-   bool quit   = false;
-   bool resize = false;
-   win32_check_window(NULL, &quit, &resize, width, height);
+   bool quit          = false;
+   bool resize        = false;
+   unsigned win_dims  = 0;
+   win32_check_window(NULL, &quit, &resize, &win_dims);
+   *dims              = win_dims;
    if (is_running_on_xbox())
    {
       /* Match the output res to the display resolution */
-      width    = uwp_get_width();
-      height   = uwp_get_height();
+      *dims = VIDEO_SCALE_PACK(uwp_get_width(), uwp_get_height());
    }
 }
 
@@ -180,12 +181,12 @@ static void gfx_ctx_uwp_destroy(void *data)
 }
 
 static bool gfx_ctx_uwp_set_video_mode(void *data,
-      unsigned width, unsigned height,
+      unsigned dims,
       bool fullscreen)
 {
    gfx_ctx_uwp_data_t *uwp = (gfx_ctx_uwp_data_t*)data;
 
-   if (!win32_set_video_mode(NULL, width, height, fullscreen))
+   if (!win32_set_video_mode(NULL, dims, fullscreen))
    {
       RARCH_ERR("[UWP EGL] win32_set_video_mode failed.\n");
    }
@@ -253,6 +254,24 @@ static uint32_t gfx_ctx_uwp_get_flags(void *data)
    return flags;
 }
 
+static bool gfx_ctx_uwp_create_surface(void *data)
+{
+#ifdef HAVE_EGL
+   return egl_create_surface(&uwp_egl, uwp_get_corewindow());
+#else
+   return false;
+#endif
+}
+
+static bool gfx_ctx_uwp_destroy_surface(void *data)
+{
+#ifdef HAVE_EGL
+   return egl_destroy_surface(&uwp_egl);
+#else
+   return false;
+#endif
+}
+
 const gfx_ctx_driver_t gfx_ctx_uwp = {
    gfx_ctx_uwp_init,
    gfx_ctx_uwp_destroy,
@@ -265,7 +284,7 @@ const gfx_ctx_driver_t gfx_ctx_uwp = {
    NULL, /* get video output size */
    NULL, /* get video output prev */
    NULL, /* get video output next */
-   win32_get_metrics,
+   NULL, /* metrics - handled by display server */
    NULL,
    NULL, /* update title */
    win32_check_window,
@@ -284,5 +303,7 @@ const gfx_ctx_driver_t gfx_ctx_uwp = {
    NULL, /* set flags */
    gfx_ctx_uwp_bind_hw_render,
    NULL,
-   NULL
+   NULL,
+   gfx_ctx_uwp_create_surface,
+   gfx_ctx_uwp_destroy_surface
 };

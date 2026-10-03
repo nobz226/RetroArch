@@ -27,6 +27,11 @@ RETRO_BEGIN_DECLS
  * is true and `file' is NULL. `file' is expected to be close()'d by the handler
  * if non-NULL.
  */
+/* The key cloud sync keeps its server manifest under.  Drivers that
+ * treat ordinary files specially (such as backing up the copy an
+ * upload replaces) leave this one alone: it is rewritten every sync. */
+#define CLOUD_SYNC_SERVER_MANIFEST "manifest.server"
+
 typedef void (*cloud_sync_complete_handler_t)(void *user_data, const char *path, bool success, RFILE *file);
 
 typedef struct cloud_sync_driver
@@ -49,11 +54,20 @@ typedef struct
 cloud_sync_driver_state_t *cloud_sync_state_get_ptr(void);
 
 extern cloud_sync_driver_t cloud_sync_webdav;
+#ifdef HAVE_SSL
+extern cloud_sync_driver_t cloud_sync_google_drive;
+#endif
+#ifdef HAVE_S3
+extern cloud_sync_driver_t cloud_sync_s3;
+#endif
 #ifdef HAVE_ICLOUD
 extern cloud_sync_driver_t cloud_sync_icloud;
 #endif
 #ifdef HAVE_ICLOUD_DRIVE
 extern cloud_sync_driver_t cloud_sync_icloud_drive;
+#endif
+#ifdef HAVE_SMBCLIENT
+extern cloud_sync_driver_t cloud_sync_smb;
 #endif
 
 extern const cloud_sync_driver_t *cloud_sync_drivers[];

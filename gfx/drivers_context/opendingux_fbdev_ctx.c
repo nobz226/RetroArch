@@ -98,26 +98,24 @@ error:
 }
 
 static void gfx_ctx_opendingux_get_video_size(void *data,
-      unsigned *width, unsigned *height)
+      unsigned *dims)
 {
    opendingux_ctx_data_t *viv = (opendingux_ctx_data_t*)data;
-   *width                     = viv->width;
-   *height                    = viv->height;
+   *dims = VIDEO_SCALE_PACK(viv->width, viv->height);
 }
 
 static void gfx_ctx_opendingux_check_window(void *data, bool *quit,
-      bool *resize, unsigned *width, unsigned *height)
+      bool *resize, unsigned *dims)
 {
-   unsigned new_width, new_height;
+   unsigned new_dims;
    opendingux_ctx_data_t *viv = (opendingux_ctx_data_t*)data;
 
 #ifdef HAVE_EGL
-   egl_get_video_size(&viv->egl, &new_width, &new_height);
+   egl_get_video_size(&viv->egl, &new_dims);
 
-   if (new_width != *width || new_height != *height)
+   if (new_dims != *dims)
    {
-      *width  = new_width;
-      *height = new_height;
+      *dims  = new_dims;
       *resize = true;
    }
 #endif
@@ -126,9 +124,11 @@ static void gfx_ctx_opendingux_check_window(void *data, bool *quit,
 }
 
 static bool gfx_ctx_opendingux_set_video_mode(void *data,
-      unsigned width, unsigned height,
+      unsigned dims,
       bool fullscreen)
 {
+   unsigned width  = VIDEO_SCALE_W(dims);
+   unsigned height = VIDEO_SCALE_H(dims);
 #ifdef HAVE_EGL
    static const EGLint attribs[] = {
       EGL_CONTEXT_CLIENT_VERSION, 2, /* Use version 2, even for GLES3. */
@@ -150,7 +150,7 @@ static bool gfx_ctx_opendingux_set_video_mode(void *data,
    if (!egl_create_context(&viv->egl, attribs))
       goto error;
    viv->native_window = 0;
-   if (!egl_create_surface(&viv->egl, viv->native_window))
+   if (!egl_create_surface(&viv->egl, (void*)viv->native_window))
       goto error;
 #endif
 
@@ -221,6 +221,26 @@ static uint32_t gfx_ctx_opendingux_get_flags(void *data)
    return flags;
 }
 
+static bool gfx_ctx_opendingux_create_surface(void *data)
+{
+#ifdef HAVE_EGL
+   opendingux_ctx_data_t *viv = (opendingux_ctx_data_t*)data;
+   return egl_create_surface(&viv->egl, (void*)viv->native_window);
+#else
+   return false;
+#endif
+}
+
+static bool gfx_ctx_opendingux_destroy_surface(void *data)
+{
+#ifdef HAVE_EGL
+   opendingux_ctx_data_t *viv = (opendingux_ctx_data_t*)data;
+   return egl_destroy_surface(&viv->egl);
+#else
+   return false;
+#endif
+}
+
 const gfx_ctx_driver_t gfx_ctx_opendingux_fbdev = {
    gfx_ctx_opendingux_init,
    gfx_ctx_opendingux_destroy,
@@ -256,5 +276,7 @@ const gfx_ctx_driver_t gfx_ctx_opendingux_fbdev = {
    gfx_ctx_opendingux_set_flags,
    gfx_ctx_opendingux_bind_hw_render,
    NULL,
-   NULL
+   NULL,
+   gfx_ctx_opendingux_create_surface,
+   gfx_ctx_opendingux_destroy_surface
 };

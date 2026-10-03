@@ -98,7 +98,7 @@ static void sdl_init_font(sdl_video_t *vid,
    if (!font_renderer_create_default(
             &vid->font_driver, &vid->font,
             *path_font ? path_font : NULL,
-            video_font_size))
+            video_font_size, FONT_ATLAS_FORMAT_A8))
    {
       RARCH_LOG("[SDL] Could not initialize fonts.\n");
       return;
@@ -276,9 +276,9 @@ static void *sdl_gfx_init(const video_info_t *video,
    RARCH_LOG("[SDL] Detecting desktop resolution %ux%u.\n", full_x, full_y);
 
    if (!video->fullscreen)
-      RARCH_LOG("[SDL] Creating window @ %ux%u.\n", video->width, video->height);
+      RARCH_LOG("[SDL] Creating window @ %ux%u.\n", VIDEO_SCALE_W(video->dims), VIDEO_SCALE_H(video->dims));
 
-   vid->screen = SDL_SetVideoMode(video->width, video->height, 32,
+   vid->screen = SDL_SetVideoMode(VIDEO_SCALE_W(video->dims), VIDEO_SCALE_H(video->dims), 32,
          SDL_HWSURFACE | SDL_HWACCEL | SDL_DOUBLEBUF | (video->fullscreen ? SDL_FULLSCREEN : 0));
 
    /* We assume that SDL chooses ARGB8888.
@@ -298,12 +298,12 @@ static void *sdl_gfx_init(const video_info_t *video,
 
    if (input && input_data)
    {
-      void *sdl_input = input_driver_init_wrap(&input_sdl,
+      void *sdl_input = input_driver_init_wrap(&input_sdl1,
             settings->arrays.input_joypad_driver);
 
       if (sdl_input)
       {
-         *input = &input_sdl;
+         *input = &input_sdl1;
          *input_data = sdl_input;
       }
       else
@@ -368,47 +368,43 @@ static bool sdl_gfx_frame(void *data, const void *frame, unsigned width,
    bool menu_is_alive = (video_info->menu_st_flags & MENU_ST_FLAG_ALIVE) ? true : false;
 #endif
 
-   if (!vid)
+   if (!frame)
       return true;
 
    title[0] = '\0';
 
    video_driver_get_window_title(title, sizeof(title));
 
-   if (vid->menu.active)
-   {
+   if (SDL_MUSTLOCK(vid->screen))
+      SDL_LockSurface(vid->screen);
+
+   video_frame_scale(
+         &vid->scaler,
+         vid->screen->pixels,
+         frame,
+         vid->scaler.in_fmt,
+         vid->screen->w,
+         vid->screen->h,
+         vid->screen->pitch,
+         width,
+         height,
+         pitch);
+
 #ifdef HAVE_MENU
-      menu_driver_frame(menu_is_alive, video_info);
-#endif
+   menu_driver_frame(menu_is_alive, video_info);
+
+   if (vid->menu.active)
       SDL_BlitSurface(vid->menu.frame, NULL, vid->screen, NULL);
-   }
-   else
-   {
-      if (SDL_MUSTLOCK(vid->screen))
-         SDL_LockSurface(vid->screen);
+#endif
 
-      video_frame_scale(
-            &vid->scaler,
-            vid->screen->pixels,
-            frame,
-            vid->scaler.in_fmt,
-            vid->screen->w,
-            vid->screen->h,
-            vid->screen->pitch,
-            width,
-            height,
-            pitch);
+   if (msg)
+      sdl_render_msg(vid, vid->screen,
+            msg, vid->screen->w, vid->screen->h, vid->screen->format,
+            video_info->font_msg_pos_x,
+            video_info->font_msg_pos_y);
 
-
-      if (SDL_MUSTLOCK(vid->screen))
-         SDL_UnlockSurface(vid->screen);
-
-      if (msg)
-         sdl_render_msg(vid, vid->screen,
-         msg, vid->screen->w, vid->screen->h, vid->screen->format,
-         video_info->font_msg_pos_x,
-         video_info->font_msg_pos_y);
-   }
+   if (SDL_MUSTLOCK(vid->screen))
+      SDL_UnlockSurface(vid->screen);
 
    if (title[0])
       SDL_WM_SetCaption(title, NULL);
@@ -439,10 +435,9 @@ static bool sdl_gfx_has_windowed(void *data) { return true; }
 static void sdl_gfx_viewport_info(void *data, struct video_viewport *vp)
 {
    sdl_video_t *vid = (sdl_video_t*)data;
-   vp->x      = 0;
-   vp->y      = 0;
-   vp->width  = vp->full_width  = vid->screen->w;
-   vp->height = vp->full_height = vid->screen->h;
+   vp->pos    = VIDEO_POS_PACK(0, 0);
+   vp->dims   = vp->full_dims   = VIDEO_SCALE_PACK(vid->screen->w,
+         vid->screen->h);
 }
 
 static void sdl_set_filtering(void *data, unsigned index, bool smooth, bool ctx_scaling)
@@ -457,7 +452,7 @@ static void sdl_apply_state_changes(void *data)
 }
 
 static void sdl_set_texture_frame(void *data, const void *frame, bool rgb32,
-      unsigned width, unsigned height, float alpha)
+      unsigned dims, float alpha)
 {
    enum scaler_pix_fmt format = rgb32
       ? SCALER_FMT_ARGB8888 : SCALER_FMT_RGBA4444;
@@ -471,9 +466,9 @@ static void sdl_set_texture_frame(void *data, const void *frame, bool rgb32,
          vid->menu.frame->w,
          vid->menu.frame->h,
          vid->menu.frame->pitch,
-         width,
-         height,
-         width * (rgb32 ? sizeof(uint32_t) : sizeof(uint16_t))
+         VIDEO_SCALE_W(dims),
+         VIDEO_SCALE_H(dims),
+         VIDEO_SCALE_W(dims) * (rgb32 ? sizeof(uint32_t) : sizeof(uint16_t))
          );
 
    SDL_SetAlpha(vid->menu.frame, SDL_SRCALPHA, 255.0 * alpha);
@@ -535,10 +530,11 @@ static const video_poke_interface_t sdl_poke_interface = {
    NULL, /* get_current_shader */
    NULL, /* get_current_software_framebuffer */
    NULL, /* get_hw_render_interface */
-   NULL, /* set_hdr_max_nits */
+   NULL, /* set_hdr_menu_nits */
    NULL, /* set_hdr_paper_white_nits */
-   NULL, /* set_hdr_contrast */
-   NULL  /* set_hdr_expand_gamut */
+   NULL, /* set_hdr_expand_gamut */
+   NULL, /* set_hdr_scanlines */
+   NULL  /* set_hdr_subpixel_layout */
 };
 
 static void sdl_get_poke_interface(void *data, const video_poke_interface_t **iface)
@@ -577,12 +573,13 @@ video_driver_t video_sdl = {
    NULL, /* set_rotation */
    sdl_gfx_viewport_info,
    NULL, /* read_viewport  */
-   NULL, /* read_frame_raw */
 #ifdef HAVE_OVERLAY
    NULL, /* get_overlay_interface */
 #endif
    sdl_get_poke_interface,
    NULL, /* wrap_type_to_enum */
+   NULL, /* shader_load_begin */
+   NULL, /* shader_load_step */
 #ifdef HAVE_GFX_WIDGETS
    NULL  /* gfx_widgets_enabled */
 #endif

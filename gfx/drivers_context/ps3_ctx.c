@@ -56,14 +56,11 @@ static enum gfx_ctx_api ps3_api = GFX_CTX_RSX_API;
 static enum gfx_ctx_api ps3_api = GFX_CTX_NONE;
 #endif
 
-static void gfx_ctx_ps3_get_resolution(unsigned idx,
-      unsigned *width, unsigned *height)
+static unsigned gfx_ctx_ps3_get_resolution(unsigned idx)
 {
    CellVideoOutResolution resolution;
    cellVideoOutGetResolution(idx, &resolution);
-
-   *width  = resolution.width;
-   *height = resolution.height;
+   return VIDEO_SCALE_PACK(resolution.width, resolution.height);
 }
 
 static void gfx_ctx_ps3_get_available_resolutions(void)
@@ -98,6 +95,15 @@ static void gfx_ctx_ps3_get_available_resolutions(void)
    global->console.screen.resolutions.count = 0;
    global->console.screen.resolutions.list  =
       malloc(resolution_count * sizeof(uint32_t));
+
+   /* NULL-check: the resolutions.list[...] writes in the loop
+    * below and the '...list[...current.idx]' read at line ~138
+    * would NULL-deref on OOM.  Void-returning function; leaving
+    * resolutions.check == false means the next call will retry
+    * (which is desired - an OOM here is transient and we want
+    * to populate the list once memory is available). */
+   if (!global->console.screen.resolutions.list)
+      return;
 
    for (i = 0; i < num_videomodes; i++)
    {
@@ -146,7 +152,7 @@ static void gfx_ctx_ps3_set_swap_interval(void *data, int interval)
 }
 
 static void gfx_ctx_ps3_check_window(void *data, bool *quit,
-      bool *resize, unsigned *width, unsigned *height)
+      bool *resize, unsigned *dims)
 {
    *quit    = false;
    *resize  = false;
@@ -176,7 +182,7 @@ static void gfx_ctx_ps3_swap_buffers(void *data)
 }
 
 static void gfx_ctx_ps3_get_video_size(void *data,
-      unsigned *width, unsigned *height)
+      unsigned *dims)
 {
 #if defined(HAVE_PSGL)
    if (ps3_api == GFX_CTX_OPENGL_API || ps3_api == GFX_CTX_OPENGL_ES_API)
@@ -220,11 +226,11 @@ static void *gfx_ctx_ps3_init(void *video_driver)
 
    if (global->console.screen.resolutions.current.id)
    {
+      unsigned dims         = gfx_ctx_ps3_get_resolution(
+            global->console.screen.resolutions.current.id);
       params.enable        |= PSGL_DEVICE_PARAMETERS_WIDTH_HEIGHT;
-
-      gfx_ctx_ps3_get_resolution(
-            global->console.screen.resolutions.current.id,
-            &params.width, &params.height);
+      params.width          = VIDEO_SCALE_W(dims);
+      params.height         = VIDEO_SCALE_H(dims);
 
       global->console.screen.pal_enable = false;
 
@@ -261,7 +267,7 @@ static void *gfx_ctx_ps3_init(void *video_driver)
 }
 
 static bool gfx_ctx_ps3_set_video_mode(void *data,
-      unsigned width, unsigned height, bool fullscreen) { return true; }
+      unsigned dims, bool fullscreen) { return true; }
 
 static void gfx_ctx_ps3_destroy_resources(gfx_ctx_ps3_data_t *ps3)
 {
@@ -316,17 +322,17 @@ static bool gfx_ctx_ps3_bind_api(void *data,
 }
 
 static void gfx_ctx_ps3_get_video_output_size(void *data,
-      unsigned *width, unsigned *height, char *desc, size_t desc_len)
+      unsigned *dims, char *desc, size_t desc_len)
 {
    global_t *global = global_get_ptr();
 
    if (!global)
       return;
 
-   gfx_ctx_ps3_get_resolution(global->console.screen.resolutions.current.id,
-         width, height);
+   *dims = gfx_ctx_ps3_get_resolution(
+         global->console.screen.resolutions.current.id);
 
-   if (*width == 720 && *height == 576)
+   if (*dims == VIDEO_SCALE_PACK(720, 576))
    {
       if (global->console.screen.pal_enable)
          global->console.screen.pal60_enable = true;
@@ -414,5 +420,7 @@ const gfx_ctx_driver_t gfx_ctx_ps3 = {
    gfx_ctx_ps3_get_flags,
    gfx_ctx_ps3_set_flags,
    NULL,
-   NULL
+   NULL,
+   NULL, /* create_surface */
+   NULL  /* destroy_surface */
 };

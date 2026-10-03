@@ -29,6 +29,7 @@
 #include <string/stdstring.h>
 #include <streams/file_stream.h>
 #include <formats/rjson.h>
+#include <formats/rjson_stream.h>
 
 #ifndef SOCKET_ERROR
 #define SOCKET_ERROR -1
@@ -235,7 +236,10 @@ typedef struct
    bool detected;
 } input_test_step_t;
 
-static input_test_step_t input_test_steps[MAX_TEST_STEPS];
+/* Allocated when the test driver or core actually starts; a static
+ * array here is load-resident forever on platforms without demand
+ * paging, for a feature almost no session activates. */
+static input_test_step_t *input_test_steps;
 
 static unsigned current_frame         = 0;
 static unsigned next_teststep_frame   = 0;
@@ -268,7 +272,7 @@ static bool ITifJSONObjectEndHandler(void *context)
    /* Copy values read from JSON file */
    input_test_steps[current_test_step].expected_button = pCtx->expected_button;
 
-   if (!string_is_empty(pCtx->message))
+   if (pCtx->message && *pCtx->message)
       strlcpy(
             input_test_steps[current_test_step].message, pCtx->message,
             sizeof(input_test_steps[current_test_step].message));
@@ -305,7 +309,7 @@ static bool ITifJSONNumberHandler(void* context, const char *s, size_t len)
    ITifJSONContext *pCtx = (ITifJSONContext*)context;
 
    /* ignore unknown members */
-   if (pCtx->current_entry_uint_val && len && !string_is_empty(s))
+   if (pCtx->current_entry_uint_val && len && (s && *s))
       *pCtx->current_entry_uint_val = string_to_unsigned(s);
 
    pCtx->current_entry_uint_val = NULL;
@@ -317,7 +321,7 @@ static bool ITifJSONStringHandler(void* context, const char *s, size_t len)
 {
    ITifJSONContext *pCtx = (ITifJSONContext*)context;
 
-   if (pCtx->current_entry_str_val && len && !string_is_empty(s))
+   if (pCtx->current_entry_str_val && len && (s && *s))
    {
       if (*pCtx->current_entry_str_val)
          free(*pCtx->current_entry_str_val);
@@ -337,31 +341,31 @@ static bool input_test_file_read(const char* file_path)
 {
    bool success            = false;
    ITifJSONContext context = {0};
-   RFILE *file             = NULL;
+   uint8_t *file_buf       = NULL;
+   int64_t file_len        = 0;
    rjson_t* parser;
 
    /* Sanity check */
-   if (    string_is_empty(file_path)
-       || !path_is_valid(file_path)
-      )
+   if (!file_path || !*file_path)
       return false;
 
-   /* Attempt to open test input file */
-   file = filestream_open(
-         file_path,
-         RETRO_VFS_FILE_ACCESS_READ,
-         RETRO_VFS_FILE_ACCESS_HINT_NONE);
-
-   if (!file)
+   /* Read the whole file in one operation: it is tiny and always
+    * parsed in full, so a single open/size/read/close beats a
+    * pre-open stat plus the chunked callback path (which itself
+    * sizes the stream with an extra fstat).  The stat below runs
+    * only to classify a failure. */
+   if (!filestream_read_file(file_path,
+         (void**)&file_buf, &file_len))
    {
-      NETRETROPAD_CORE_PREFIX(log_cb)(RETRO_LOG_ERROR,
-            "[Remote RetroPad] Failed to open test input file: \"%s\".\n",
-            file_path);
+      if (path_is_valid(file_path))
+         NETRETROPAD_CORE_PREFIX(log_cb)(RETRO_LOG_ERROR,
+               "[Remote RetroPad] Failed to open test input file: \"%s\".\n",
+               file_path);
       return false;
    }
 
    /* Initialise JSON parser */
-   if (!(parser = rjson_open_rfile(file)))
+   if (!(parser = rjson_open_buffer(file_buf, (size_t)file_len)))
    {
       NETRETROPAD_CORE_PREFIX(log_cb)(RETRO_LOG_ERROR,
             "[Remote RetroPad] Failed to create JSON parser.\n");
@@ -407,8 +411,8 @@ end:
    if (context.message)
       free(context.message);
 
-   /* Close log file */
-   filestream_close(file);
+   /* Release file contents */
+   free(file_buf);
 
    if (last_test_step >= MAX_TEST_STEPS)
    {
@@ -435,31 +439,69 @@ static void sensors_init(void)
    struct retro_sensor_interface sensor_interface = {0};
    if (NETRETROPAD_CORE_PREFIX(environ_cb)(RETRO_ENVIRONMENT_GET_SENSOR_INTERFACE, &sensor_interface))
    {
-      NETRETROPAD_CORE_PREFIX(log_cb)(RETRO_LOG_DEBUG,"[Remote RetroPad] Sensor interface supported, enabling.\n");
+      NETRETROPAD_CORE_PREFIX(log_cb)(RETRO_LOG_DEBUG,"[Remote RetroPad] Sensor interface supported.\n");
       NETRETROPAD_CORE_PREFIX(sensor_get_input_cb) = sensor_interface.get_sensor_input;
       NETRETROPAD_CORE_PREFIX(sensor_set_state_cb) = sensor_interface.set_sensor_state;
-
-      if (NETRETROPAD_CORE_PREFIX(sensor_set_state_cb) && NETRETROPAD_CORE_PREFIX(sensor_get_input_cb))
-      {
-         if (NETRETROPAD_CORE_PREFIX(sensor_set_state_cb)(0, RETRO_SENSOR_ACCELEROMETER_ENABLE, EVENT_RATE))
-         {
-            tilt_sensor_enabled = true;
-            NETRETROPAD_CORE_PREFIX(log_cb)(RETRO_LOG_DEBUG,"[Remote RetroPad] Tilt sensor enabled.\n");
-         }
-
-         if (NETRETROPAD_CORE_PREFIX(sensor_set_state_cb)(0, RETRO_SENSOR_GYROSCOPE_ENABLE, EVENT_RATE))
-         {
-            gyro_sensor_enabled = true;
-            NETRETROPAD_CORE_PREFIX(log_cb)(RETRO_LOG_DEBUG,"[Remote RetroPad] Gyro sensor enabled.\n");
-         }
-
-         if (NETRETROPAD_CORE_PREFIX(sensor_set_state_cb)(0, RETRO_SENSOR_ILLUMINANCE_ENABLE, EVENT_RATE))
-         {
-            lux_sensor_enabled = true;
-            NETRETROPAD_CORE_PREFIX(log_cb)(RETRO_LOG_DEBUG,"[Remote RetroPad] Lux sensor enabled.\n");
-         }
-      }
    }
+}
+
+static void sensors_enable(void)
+{
+   if (!NETRETROPAD_CORE_PREFIX(sensor_set_state_cb)
+       || !NETRETROPAD_CORE_PREFIX(sensor_get_input_cb))
+      sensors_init();
+   if (!NETRETROPAD_CORE_PREFIX(sensor_set_state_cb)
+       || !NETRETROPAD_CORE_PREFIX(sensor_get_input_cb))
+      return;
+
+   if (!tilt_sensor_enabled
+       && NETRETROPAD_CORE_PREFIX(sensor_set_state_cb)(0, RETRO_SENSOR_ACCELEROMETER_ENABLE, EVENT_RATE))
+   {
+      tilt_sensor_enabled = true;
+      NETRETROPAD_CORE_PREFIX(log_cb)(RETRO_LOG_DEBUG,"[Remote RetroPad] Tilt sensor enabled.\n");
+   }
+
+   if (!gyro_sensor_enabled
+       && NETRETROPAD_CORE_PREFIX(sensor_set_state_cb)(0, RETRO_SENSOR_GYROSCOPE_ENABLE, EVENT_RATE))
+   {
+      gyro_sensor_enabled = true;
+      NETRETROPAD_CORE_PREFIX(log_cb)(RETRO_LOG_DEBUG,"[Remote RetroPad] Gyro sensor enabled.\n");
+   }
+
+   if (!lux_sensor_enabled
+       && NETRETROPAD_CORE_PREFIX(sensor_set_state_cb)(0, RETRO_SENSOR_ILLUMINANCE_ENABLE, EVENT_RATE))
+   {
+      lux_sensor_enabled = true;
+      NETRETROPAD_CORE_PREFIX(log_cb)(RETRO_LOG_DEBUG,"[Remote RetroPad] Lux sensor enabled.\n");
+   }
+}
+
+static void sensors_disable(void)
+{
+   if (!NETRETROPAD_CORE_PREFIX(sensor_set_state_cb))
+      return;
+
+   if (tilt_sensor_enabled)
+   {
+      NETRETROPAD_CORE_PREFIX(sensor_set_state_cb)(0, RETRO_SENSOR_ACCELEROMETER_DISABLE, EVENT_RATE);
+      tilt_sensor_enabled = false;
+   }
+
+   if (gyro_sensor_enabled)
+   {
+      NETRETROPAD_CORE_PREFIX(sensor_set_state_cb)(0, RETRO_SENSOR_GYROSCOPE_DISABLE, EVENT_RATE);
+      gyro_sensor_enabled = false;
+   }
+
+   if (lux_sensor_enabled)
+   {
+      NETRETROPAD_CORE_PREFIX(sensor_set_state_cb)(0, RETRO_SENSOR_ILLUMINANCE_DISABLE, EVENT_RATE);
+      lux_sensor_enabled = false;
+   }
+
+   memset(tilt_sensor_values, 0, sizeof(tilt_sensor_values));
+   memset(gyro_sensor_values, 0, sizeof(gyro_sensor_values));
+   lux_sensor_value = 0.0f;
 }
 
 static void draw_background(void)
@@ -510,17 +552,31 @@ static void draw_background(void)
 
 static void flip_screen(void)
 {
+   unsigned prev_screen = current_screen;
    if      (current_screen == NETRETROPAD_SCREEN_PAD)
       current_screen = NETRETROPAD_SCREEN_KEYBOARD;
    else if (current_screen == NETRETROPAD_SCREEN_KEYBOARD)
       current_screen = NETRETROPAD_SCREEN_SENSORS;
    else if (current_screen == NETRETROPAD_SCREEN_SENSORS)
       current_screen = NETRETROPAD_SCREEN_PAD;
+
+   if (prev_screen != current_screen)
+   {
+      if (current_screen == NETRETROPAD_SCREEN_SENSORS)
+         sensors_enable();
+      else if (prev_screen == NETRETROPAD_SCREEN_SENSORS)
+         sensors_disable();
+   }
+
    draw_background();
 }
 
 void NETRETROPAD_CORE_PREFIX(retro_init)(void)
 {
+   if (!input_test_steps)
+      input_test_steps = (input_test_step_t*)
+            calloc(MAX_TEST_STEPS, sizeof(*input_test_steps));
+
    unsigned i;
 
    dump_state_blocked = false;
@@ -542,6 +598,10 @@ void NETRETROPAD_CORE_PREFIX(retro_init)(void)
 
 void NETRETROPAD_CORE_PREFIX(retro_deinit)(void)
 {
+   if (input_test_steps)
+      free(input_test_steps);
+   input_test_steps = NULL;
+
    unsigned i;
 
    if (frame_buf)
@@ -555,12 +615,22 @@ void NETRETROPAD_CORE_PREFIX(retro_deinit)(void)
       descriptors[i]->value = NULL;
    }
 
-   if (NETRETROPAD_CORE_PREFIX(sensor_set_state_cb) && NETRETROPAD_CORE_PREFIX(sensor_get_input_cb))
-   {
-      NETRETROPAD_CORE_PREFIX(sensor_set_state_cb)(0, RETRO_SENSOR_ACCELEROMETER_DISABLE, EVENT_RATE);
-      NETRETROPAD_CORE_PREFIX(sensor_set_state_cb)(0, RETRO_SENSOR_GYROSCOPE_DISABLE, EVENT_RATE);
-      NETRETROPAD_CORE_PREFIX(sensor_set_state_cb)(0, RETRO_SENSOR_ILLUMINANCE_DISABLE, EVENT_RATE);
-   }
+   sensors_disable();
+   NETRETROPAD_CORE_PREFIX(sensor_get_input_cb) = NULL;
+   NETRETROPAD_CORE_PREFIX(sensor_set_state_cb) = NULL;
+   memset(sensor_item_colors, 0, sizeof(sensor_item_colors));
+
+   current_frame          = 0;
+   current_screen         = NETRETROPAD_SCREEN_PAD;
+   next_teststep_frame    = 0;
+   current_test_step      = 0;
+   last_test_step         = MAX_TEST_STEPS + 1;
+   input_state_validated  = 0;
+   combo_state_validated  = 0;
+   memset(keyboard_state_validated, 0, sizeof(keyboard_state_validated));
+   dump_state_blocked     = false;
+   hide_analog_mismatch   = true;
+   mouse_type             = 0;
 }
 
 unsigned NETRETROPAD_CORE_PREFIX(retro_api_version)(void)
@@ -884,7 +954,7 @@ void NETRETROPAD_CORE_PREFIX(retro_reset)(void)
    open_UDP_socket();
    input_state_validated = 0;
    combo_state_validated = 0;
-   memset(keyboard_state_validated, 0, RETROK_LAST);
+   memset(keyboard_state_validated, 0, sizeof(keyboard_state_validated));
 }
 
 void NETRETROPAD_CORE_PREFIX(retro_run)(void)
@@ -900,9 +970,6 @@ void NETRETROPAD_CORE_PREFIX(retro_run)(void)
    bool updated = false;
    if (NETRETROPAD_CORE_PREFIX(environ_cb)(RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE, &updated) && updated)
       netretropad_check_variables();
-
-   if (!current_frame && current_screen == NETRETROPAD_SCREEN_SENSORS)
-      sensors_init();
 
    current_frame++;
    /* Update input states and send them if needed */
@@ -971,6 +1038,10 @@ void NETRETROPAD_CORE_PREFIX(retro_run)(void)
    }
 
    /* Accelerometer and gyroscope. */
+   if (current_screen == NETRETROPAD_SCREEN_SENSORS
+       && !tilt_sensor_enabled && !gyro_sensor_enabled && !lux_sensor_enabled)
+      sensors_enable();
+
    if (tilt_sensor_enabled)
    {
       tilt_sensor_values[0] = NETRETROPAD_CORE_PREFIX(sensor_get_input_cb)(0, RETRO_SENSOR_ACCELEROMETER_X);
@@ -1008,7 +1079,7 @@ void NETRETROPAD_CORE_PREFIX(retro_run)(void)
          /* Accelerometer display range: from 0 to 1g, covering tilt from a horizontal to a vertical position. */
          if (i < 3)
          {
-            value         = tilt_sensor_values[i]/9.81;
+            value         = tilt_sensor_values[i];
             median_index += (i+1)*10;
          }
          else if (i < 6)

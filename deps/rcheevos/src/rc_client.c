@@ -14,15 +14,15 @@
 #include <stdarg.h>
 
 #ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#include <profileapi.h>
+ #define WIN32_LEAN_AND_MEAN
+ #include <windows.h>
 #else
-#include <time.h>
+ #include <time.h>
 #endif
 
 #define RC_CLIENT_UNKNOWN_GAME_ID (uint32_t)-1
 #define RC_CLIENT_RECENT_UNLOCK_DELAY_SECONDS (10 * 60) /* ten minutes */
+#define RC_CLIENT_ACHIEVEMENT_WARNING_ID 101000001
 
 #define RC_MINIMUM_UNPAUSED_FRAMES 20
 #define RC_PAUSE_DECAY_MULTIPLIER 4
@@ -240,7 +240,7 @@ static void rc_client_log_message_va(const rc_client_t* client, const char* form
     char buffer[2048];
 
 #ifdef __STDC_SECURE_LIB__
-    vsprintf_s(buffer, sizeof(buffer), format, args);
+    vsnprintf_s(buffer, sizeof(buffer), _TRUNCATE, format, args);
 #elif __STDC_VERSION__ >= 199901L /* vsnprintf requires c99 */
     vsnprintf(buffer, sizeof(buffer), format, args);
 #else /* c89 doesn't have a size-limited vsprintf function - assume the buffer is large enough */
@@ -317,6 +317,22 @@ void rc_client_enable_logging(rc_client_t* client, int level, rc_client_message_
 }
 
 /* ===== Common ===== */
+
+#if defined(__APPLE__) && defined(__MACH__)
+ #ifdef CLOCK_MONOTONIC
+  /* clock_gettime() was added to Darwin in iOS 10.0 and macOS 10.12.
+   * On earlier deployment targets (like Leopard 10.5), the symbol doesn't exist
+   * in libSystem causing an "undefined reference to clock_gettime" linker error.
+   * To get the code to use the #else block below, forcibly undefine CLOCK_MONOTONIC
+   * when targeting earlier versions. */
+  #include <AvailabilityMacros.h>
+  #if (defined(MAC_OS_X_VERSION_MIN_REQUIRED) && MAC_OS_X_VERSION_MIN_REQUIRED < 101200)
+   #undef CLOCK_MONOTONIC
+  #elif (defined(__IPHONE_OS_VERSION_MIN_REQUIRED) && __IPHONE_OS_VERSION_MIN_REQUIRED < 100000)
+   #undef CLOCK_MONOTONIC
+  #endif
+ #endif
+#endif
 
 static rc_clock_t rc_client_clock_get_now_millisecs(const rc_client_t* client)
 {
@@ -637,7 +653,13 @@ static int rc_client_get_image_url(char buffer[], size_t buffer_size, int image_
   image_request.image_name = image_name;
   result = rc_api_init_fetch_image_request_hosted(&request, &image_request, NULL);
   if (result == RC_OK)
-    snprintf(buffer, buffer_size, "%s", request.url);
+  {
+    const size_t len = strlen(request.url);
+    if (len >= buffer_size)
+      result = RC_INSUFFICIENT_BUFFER;
+    else
+      memcpy(buffer, request.url, len + 1);
+  }
 
   rc_api_destroy_request(&request);
   return result;
@@ -697,6 +719,7 @@ static void rc_client_login_callback(const rc_api_server_response_t* server_resp
       client->user.display_name = rc_buffer_strcpy(&client->state.buffer, login_response.display_name);
 
     client->user.avatar_url = rc_buffer_strcpy(&client->state.buffer, login_response.avatar_url);
+    client->user.avatar_last_updated = login_response.avatar_last_updated;
     client->user.token = rc_buffer_strcpy(&client->state.buffer, login_response.api_token);
     client->user.score = login_response.score;
     client->user.score_softcore = login_response.score_softcore;
@@ -898,7 +921,11 @@ int rc_client_user_get_image_url(const rc_client_user_t* user, char buffer[], si
     return RC_INVALID_STATE;
 
   if (user->avatar_url) {
-    snprintf(buffer, buffer_size, "%s", user->avatar_url);
+    const size_t len = strlen(user->avatar_url);
+    if (len >= buffer_size)
+      return RC_INSUFFICIENT_BUFFER;
+
+    memcpy(buffer, user->avatar_url, len + 1);
     return RC_OK;
   }
 
@@ -924,6 +951,11 @@ static void rc_client_subset_get_user_game_summary(const rc_client_t* client,
   for (; achievement < stop; ++achievement) {
     switch (achievement->public_.category) {
       case RC_CLIENT_ACHIEVEMENT_CATEGORY_CORE:
+        if (achievement->public_.id >= RC_CLIENT_ACHIEVEMENT_WARNING_ID) {
+          /* ignore warning achievements */
+          continue;
+        }
+
         ++summary->num_core_achievements;
         summary->points_core += achievement->public_.points;
 
@@ -1686,6 +1718,67 @@ static void rc_client_free_pending_media(rc_client_pending_media_t* pending_medi
   free(pending_media);
 }
 
+static void rc_client_log_active_assets(rc_client_t* client)
+{
+  uint32_t num_achievements;
+  uint32_t num_active_achievements;
+  uint32_t num_unsupported_achievements;
+  uint32_t num_leaderboards;
+  uint32_t num_unsupported_leaderboards;
+  const rc_client_achievement_info_t* ach;
+  const rc_client_achievement_info_t* ach_stop;
+  const rc_client_leaderboard_info_t* lbd;
+  const rc_client_leaderboard_info_t* lbd_stop;
+
+  const rc_client_subset_info_t* subset = client->game->subsets;
+  for (; subset; subset = subset->next) {
+    num_achievements = 0;
+    num_active_achievements = 0;
+    num_unsupported_achievements = 0;
+    num_leaderboards = 0;
+    num_unsupported_leaderboards = 0;
+
+    ach = subset->achievements;
+    ach_stop = ach + subset->public_.num_achievements;
+    for (; ach < ach_stop; ++ach) {
+      if (ach->public_.category == RC_CLIENT_ACHIEVEMENT_CATEGORY_CORE) {
+        ++num_achievements;
+        if (ach->public_.state == RC_CLIENT_ACHIEVEMENT_STATE_ACTIVE)
+          ++num_active_achievements;
+        else if (ach->public_.state == RC_CLIENT_ACHIEVEMENT_STATE_DISABLED)
+          ++num_unsupported_achievements;
+      }
+    }
+
+    lbd = subset->leaderboards;
+    lbd_stop = lbd + subset->public_.num_leaderboards;
+    for (; lbd < lbd_stop; ++lbd) {
+      ++num_leaderboards;
+      if (lbd->public_.state == RC_CLIENT_LEADERBOARD_STATE_DISABLED)
+        ++num_unsupported_leaderboards;
+    }
+
+    if (num_unsupported_achievements) {
+      if (num_unsupported_leaderboards) {
+        RC_CLIENT_LOG_INFO_FORMATTED(client, "Set %u: %u/%u achievements active (%u unsupported), %u leaderboards (%u unsupported)",
+          subset->public_.id, num_active_achievements, num_achievements, num_unsupported_achievements, num_leaderboards, num_unsupported_leaderboards);
+      }
+      else {
+        RC_CLIENT_LOG_INFO_FORMATTED(client, "Set %u: %u/%u achievements active (%u unsupported), %u leaderboards",
+          subset->public_.id, num_active_achievements, num_achievements, num_unsupported_achievements, num_leaderboards);
+      }
+    }
+    else if (num_unsupported_leaderboards) {
+      RC_CLIENT_LOG_INFO_FORMATTED(client, "Set %u: %u/%u achievements active, %u leaderboards (%u unsupported)",
+        subset->public_.id, num_active_achievements, num_achievements, num_leaderboards, num_unsupported_leaderboards);
+    }
+    else {
+      RC_CLIENT_LOG_INFO_FORMATTED(client, "Set %u: %u/%u achievements active, %u leaderboards",
+        subset->public_.id, num_active_achievements, num_achievements, num_leaderboards);
+    }
+  }
+}
+
 /* NOTE: address validation uses the read_memory callback to make sure the client
  *       will return data for the requested address. As such, this function must
  *       respect the `client->state.allow_background_memory_reads setting. Use
@@ -1720,10 +1813,13 @@ static void rc_client_activate_game(rc_client_load_state_t* load_state, rc_api_s
 
     /* make the loaded game active if another game is not aleady being loaded. */
     rc_mutex_lock(&client->state.mutex);
-    if (client->state.load == load_state)
+    if (client->state.load == load_state) {
       client->game = load_state->game;
-    else
+      client->state.frames_processed = client->state.frames_at_last_ping = 0;
+    }
+    else {
       load_state->progress = RC_CLIENT_LOAD_GAME_STATE_ABORTED;
+    }
     rc_mutex_unlock(&client->state.mutex);
 
     if (load_state->progress != RC_CLIENT_LOAD_GAME_STATE_ABORTED) {
@@ -1807,6 +1903,9 @@ static void rc_client_activate_game(rc_client_load_state_t* load_state, rc_api_s
         RC_CLIENT_LOG_INFO_FORMATTED(client, "Game %u loaded, hardcore %s%s", load_state->game->public_.id,
             client->state.hardcore ? "enabled" : "disabled",
             (client->state.spectator_mode != RC_CLIENT_SPECTATOR_MODE_OFF) ? ", spectating" : "");
+
+        if (client->state.log_level >= RC_CLIENT_LOG_LEVEL_INFO)
+          rc_client_log_active_assets(client);
       }
       else {
         RC_CLIENT_LOG_INFO_FORMATTED(client, "Subset %u loaded", load_state->subset->public_.id);
@@ -2032,9 +2131,9 @@ static void rc_client_copy_achievements(rc_client_load_state_t* load_state,
       else {
         rc_buffer_consume(buffer, (const uint8_t*)preparse.parse.buffer, (uint8_t*)preparse.parse.buffer + preparse.parse.offset);
       }
-
-      rc_destroy_preparse_state(&preparse);
     }
+
+    rc_destroy_preparse_state(&preparse);
 
     achievement->created_time = read->created;
     achievement->updated_time = read->updated;
@@ -2352,6 +2451,7 @@ static int rc_client_attach_load_state(rc_client_t* client, rc_client_load_state
 
     rc_mutex_lock(&client->state.mutex);
     client->state.load = load_state;
+    client->state.frames_processed = client->state.frames_at_last_ping = 0;
     rc_mutex_unlock(&client->state.mutex);
   }
   else if (client->state.load != load_state) {
@@ -3446,7 +3546,11 @@ int rc_client_game_get_image_url(const rc_client_game_t* game, char buffer[], si
     return RC_INVALID_STATE;
 
   if (game->badge_url) {
-    snprintf(buffer, buffer_size, "%s", game->badge_url);
+    const size_t len = strlen(game->badge_url);
+    if (len >= buffer_size)
+      return RC_INSUFFICIENT_BUFFER;
+
+    memcpy(buffer, game->badge_url, len + 1);
     return RC_OK;
   }
 
@@ -3481,6 +3585,58 @@ const rc_client_subset_t* rc_client_get_subset_info(rc_client_t* client, uint32_
   }
 
   return NULL;
+}
+
+rc_client_subset_list_t* rc_client_create_subset_list(rc_client_t* client)
+{
+  rc_client_subset_list_info_t* list;
+  const rc_client_subset_info_t* subset;
+  const rc_client_subset_t** subset_ptr;
+  const uint32_t list_size = RC_ALIGN(sizeof(*list));
+  uint32_t num_subsets = 0;
+
+  if (!client)
+    return (rc_client_subset_list_t*)calloc(1, list_size);
+
+#ifdef RC_CLIENT_SUPPORTS_EXTERNAL
+  if (client->state.external_client && client->state.external_client->create_subset_list)
+    return (rc_client_subset_list_t*)client->state.external_client->create_subset_list();
+#endif
+
+  if (!client->game)
+    return (rc_client_subset_list_t*)calloc(1, list_size);
+
+  rc_mutex_lock(&client->state.mutex);
+
+  subset = client->game->subsets;
+  for (; subset; subset = subset->next) {
+    if (subset->active)
+      num_subsets++;
+  }
+
+  list = (rc_client_subset_list_info_t*)malloc(list_size + num_subsets * sizeof(rc_client_subset_t*));
+  list->public_.subsets = subset_ptr = (const rc_client_subset_t**)((uint8_t*)list + list_size);
+
+  subset = client->game->subsets;
+  for (; subset; subset = subset->next) {
+    if (subset->active)
+      *subset_ptr++ = &subset->public_;
+  }
+
+  rc_mutex_unlock(&client->state.mutex);
+
+  list->destroy_func = NULL;
+  list->public_.num_subsets = (uint32_t)(subset_ptr - list->public_.subsets);
+  return &list->public_;
+}
+
+void rc_client_destroy_subset_list(rc_client_subset_list_t* list)
+{
+  rc_client_subset_list_info_t* info = (rc_client_subset_list_info_t*)list;
+  if (info->destroy_func)
+    info->destroy_func(info);
+  else
+    free(list);
 }
 
 /* ===== Fetch Game Hashes ===== */
@@ -3595,6 +3751,345 @@ void rc_client_destroy_hash_library(rc_client_hash_library_t* list)
   free(list);
 }
 
+/* ===== Fetch Game Titles ===== */
+
+typedef struct rc_client_fetch_game_titles_callback_data_t {
+  rc_client_t* client;
+  rc_client_fetch_game_titles_callback_t callback;
+  void* callback_userdata;
+  rc_client_async_handle_t async_handle;
+} rc_client_fetch_game_titles_callback_data_t;
+
+static void rc_client_fetch_game_titles_callback(const rc_api_server_response_t* server_response, void* callback_data)
+{
+  rc_client_fetch_game_titles_callback_data_t* titles_callback_data =
+    (rc_client_fetch_game_titles_callback_data_t*)callback_data;
+  rc_client_t* client = titles_callback_data->client;
+  rc_api_fetch_game_titles_response_t titles_response;
+  const char* error_message;
+  int result;
+
+  result = rc_client_end_async(client, &titles_callback_data->async_handle);
+  if (result) {
+    if (result != RC_CLIENT_ASYNC_DESTROYED)
+      RC_CLIENT_LOG_VERBOSE(client, "Fetch game titles aborted");
+
+    free(titles_callback_data);
+    return;
+  }
+
+  result = rc_api_process_fetch_game_titles_server_response(&titles_response, server_response);
+  error_message =
+    rc_client_server_error_message(&result, server_response->http_status_code, &titles_response.response);
+  if (error_message) {
+    RC_CLIENT_LOG_ERR_FORMATTED(client, "Fetch game titles failed: %s", error_message);
+    titles_callback_data->callback(result, error_message, NULL, client, titles_callback_data->callback_userdata);
+  } else {
+    rc_client_game_title_list_t* list;
+    size_t strings_size = 0;
+    const rc_api_game_title_entry_t* src;
+    const rc_api_game_title_entry_t* stop;
+    size_t list_size;
+
+    /* calculate string buffer size */
+    for (src = titles_response.entries, stop = src + titles_response.num_entries; src < stop; ++src) {
+      if (src->title)
+        strings_size += strlen(src->title) + 1;
+      if (src->image_url)
+        strings_size += strlen(src->image_url) + 1;
+    }
+
+    list_size = sizeof(*list) + sizeof(rc_client_game_title_entry_t) * titles_response.num_entries + strings_size;
+    list = (rc_client_game_title_list_t*)malloc(list_size);
+    if (!list) {
+      titles_callback_data->callback(RC_OUT_OF_MEMORY, rc_error_str(RC_OUT_OF_MEMORY), NULL, client,
+                                     titles_callback_data->callback_userdata);
+    } else {
+      rc_client_game_title_entry_t* entry = list->entries =
+        (rc_client_game_title_entry_t*)((uint8_t*)list + sizeof(*list));
+      char* strings = (char*)((uint8_t*)list + sizeof(*list) +
+                              sizeof(rc_client_game_title_entry_t) * titles_response.num_entries);
+
+      for (src = titles_response.entries, stop = src + titles_response.num_entries; src < stop; ++src, ++entry) {
+        entry->game_id = src->id;
+
+        if (src->title) {
+          const size_t len = strlen(src->title) + 1;
+          entry->title = strings;
+          memcpy(strings, src->title, len);
+          strings += len;
+        } else {
+          entry->title = NULL;
+        }
+
+        if (src->image_name)
+          snprintf(entry->badge_name, sizeof(entry->badge_name), "%s", src->image_name);
+        else
+          entry->badge_name[0] = '\0';
+
+        if (src->image_url) {
+          const size_t len = strlen(src->image_url) + 1;
+          entry->badge_url = strings;
+          memcpy(strings, src->image_url, len);
+          strings += len;
+        }
+        else {
+          entry->badge_url = NULL;
+        }
+      }
+
+      list->num_entries = titles_response.num_entries;
+
+      titles_callback_data->callback(RC_OK, NULL, list, client, titles_callback_data->callback_userdata);
+    }
+  }
+
+  rc_api_destroy_fetch_game_titles_response(&titles_response);
+  free(titles_callback_data);
+}
+
+rc_client_async_handle_t* rc_client_begin_fetch_game_titles(rc_client_t* client, const uint32_t* game_ids,
+                                                            uint32_t num_game_ids,
+                                                            rc_client_fetch_game_titles_callback_t callback,
+                                                            void* callback_userdata)
+{
+  rc_api_fetch_game_titles_request_t api_params;
+  rc_client_fetch_game_titles_callback_data_t* callback_data;
+  rc_client_async_handle_t* async_handle;
+  rc_api_request_t request;
+  int result;
+  const char* error_message;
+
+  if (!client) {
+    callback(RC_INVALID_STATE, "client is required", NULL, client, callback_userdata);
+    return NULL;
+  }
+
+  if (!game_ids || num_game_ids == 0) {
+    callback(RC_INVALID_STATE, "game_ids is required", NULL, client, callback_userdata);
+    return NULL;
+  }
+
+  api_params.game_ids = game_ids;
+  api_params.num_game_ids = num_game_ids;
+  result = rc_api_init_fetch_game_titles_request_hosted(&request, &api_params, &client->state.host);
+
+  if (result != RC_OK) {
+    error_message = rc_error_str(result);
+    callback(result, error_message, NULL, client, callback_userdata);
+    return NULL;
+  }
+
+  callback_data = (rc_client_fetch_game_titles_callback_data_t*)calloc(1, sizeof(*callback_data));
+  if (!callback_data) {
+    callback(RC_OUT_OF_MEMORY, rc_error_str(RC_OUT_OF_MEMORY), NULL, client, callback_userdata);
+    return NULL;
+  }
+
+  callback_data->client = client;
+  callback_data->callback = callback;
+  callback_data->callback_userdata = callback_userdata;
+
+  async_handle = &callback_data->async_handle;
+  rc_client_begin_async(client, async_handle);
+  client->callbacks.server_call(&request, rc_client_fetch_game_titles_callback, callback_data, client);
+  rc_api_destroy_request(&request);
+
+  return rc_client_async_handle_valid(client, async_handle) ? async_handle : NULL;
+}
+
+void rc_client_destroy_game_title_list(rc_client_game_title_list_t* list)
+{
+  free(list);
+}
+
+/* ===== Fetch Games List ===== */
+
+typedef struct rc_client_fetch_game_list_callback_data_t {
+  rc_client_t* client;
+  rc_client_fetch_game_list_callback_t callback;
+  void* callback_userdata;
+  rc_client_async_handle_t async_handle;
+} rc_client_fetch_game_list_callback_data_t;
+
+static void rc_client_fetch_game_list_callback(const rc_api_server_response_t* server_response, void* callback_data)
+{
+  rc_client_fetch_game_list_callback_data_t* list_callback_data =
+    (rc_client_fetch_game_list_callback_data_t*)callback_data;
+  rc_client_t* client = list_callback_data->client;
+  rc_api_fetch_games_list_response_t list_response;
+  const char* error_message;
+  int result;
+
+  result = rc_client_end_async(client, &list_callback_data->async_handle);
+  if (result) {
+    if (result != RC_CLIENT_ASYNC_DESTROYED)
+      RC_CLIENT_LOG_VERBOSE(client, "Fetch game list aborted");
+
+    free(list_callback_data);
+    return;
+  }
+
+  result = rc_api_process_fetch_games_list_server_response(&list_response, server_response);
+  error_message =
+    rc_client_server_error_message(&result, server_response->http_status_code, &list_response.response);
+  if (error_message) {
+    RC_CLIENT_LOG_ERR_FORMATTED(client, "Fetch game list failed: %s", error_message);
+    list_callback_data->callback(result, error_message, NULL, client, list_callback_data->callback_userdata);
+  } else {
+    rc_client_game_list_t* list;
+    size_t strings_size = 0, hashes_size = 0;
+    const rc_api_game_list_entry_t* src;
+    const rc_api_game_list_entry_t* stop;
+    size_t list_size;
+    uint32_t i;
+
+    /* calculate string buffer size */
+    for (src = list_response.entries, stop = src + list_response.num_entries; src < stop; ++src) {
+      if (src->name)
+        strings_size += strlen(src->name) + 1;
+      if (src->image_name)
+        strings_size += strlen(src->image_name) + 1;
+      if (src->image_url)
+        strings_size += strlen(src->image_url) + 1;
+      hashes_size += src->num_supported_hashes * sizeof(const char*);
+      for (i = 0; i < src->num_supported_hashes; i++)
+        strings_size += strlen(src->supported_hashes[i]) + 1;
+      hashes_size += src->num_unsupported_hashes * sizeof(const char*);
+      for (i = 0; i < src->num_unsupported_hashes; i++)
+        strings_size += strlen(src->unsupported_hashes[i]) + 1;
+    }
+
+    list_size = sizeof(*list) + sizeof(rc_client_game_list_entry_t) * list_response.num_entries +
+                sizeof(const char*) * hashes_size + strings_size;
+    list = (rc_client_game_list_t*)malloc(list_size);
+    if (!list) {
+      list_callback_data->callback(RC_OUT_OF_MEMORY, rc_error_str(RC_OUT_OF_MEMORY), NULL, client,
+                                     list_callback_data->callback_userdata);
+    } else {
+      rc_client_game_list_entry_t* entry = list->entries =
+        (rc_client_game_list_entry_t*)((uint8_t*)list + sizeof(*list));
+      const char** hash_list =
+        (const char**)((uint8_t*)entry + sizeof(rc_client_game_list_entry_t) * list_response.num_entries);
+      char* strings = (char*)((uint8_t*)hash_list + sizeof(const char*) * hashes_size);
+      size_t len;
+
+      for (src = list_response.entries, stop = src + list_response.num_entries; src < stop; ++src, ++entry) {
+        entry->id = src->id;
+        entry->num_achievements = src->num_achievements;
+        entry->num_leaderboards = src->num_leaderboards;
+        entry->points = src->points;
+
+        if (src->name) {
+          len = strlen(src->name) + 1;
+          entry->name = strings;
+          memcpy(strings, src->name, len);
+          strings += len;
+        } else {
+          entry->name = NULL;
+        }
+
+        if (src->image_name) {
+          len = strlen(src->image_name) + 1;
+          entry->image_name = strings;
+          memcpy(strings, src->image_name, len);
+          strings += len;
+        } else {
+          entry->image_name = NULL;
+        }
+
+        if (src->image_url) {
+          len = strlen(src->image_url) + 1;
+          entry->image_url = strings;
+          memcpy(strings, src->image_url, len);
+          strings += len;
+        } else {
+          entry->image_url = NULL;
+        }
+
+        if ((entry->num_supported_hashes = src->num_supported_hashes) > 0) {
+          entry->supported_hashes = hash_list;
+          for (i = 0; i < src->num_supported_hashes; i++) {
+            len = strlen(src->supported_hashes[i]) + 1;
+            *(hash_list++) = strings;
+            memcpy(strings, src->supported_hashes[i], len);
+            strings += len;
+          }
+        } else {
+          entry->supported_hashes = NULL;
+        }
+
+        if ((entry->num_unsupported_hashes = src->num_unsupported_hashes) > 0) {
+          entry->unsupported_hashes = hash_list;
+          for (i = 0; i < src->num_unsupported_hashes; i++) {
+            len = strlen(src->unsupported_hashes[i]) + 1;
+            *(hash_list++) = strings;
+            memcpy(strings, src->unsupported_hashes[i], len);
+            strings += len;
+          }
+        } else {
+          entry->unsupported_hashes = NULL;
+        }
+      }
+
+      list->num_entries = list_response.num_entries;
+
+      list_callback_data->callback(RC_OK, NULL, list, client, list_callback_data->callback_userdata);
+    }
+  }
+
+  rc_api_destroy_fetch_games_list_response(&list_response);
+  free(list_callback_data);
+}
+
+rc_client_async_handle_t* rc_client_begin_fetch_game_list(rc_client_t* client, uint32_t console_id,
+                                                            rc_client_fetch_game_list_callback_t callback,
+                                                            void* callback_userdata)
+{
+  rc_api_fetch_games_list_request_t api_params;
+  rc_client_fetch_game_list_callback_data_t* callback_data;
+  rc_client_async_handle_t* async_handle;
+  rc_api_request_t request;
+  int result;
+  const char* error_message;
+
+  if (!client) {
+    callback(RC_INVALID_STATE, "client is required", NULL, client, callback_userdata);
+    return NULL;
+  }
+
+  api_params.console_id = console_id;
+  result = rc_api_init_fetch_games_list_request_hosted(&request, &api_params, &client->state.host);
+
+  if (result != RC_OK) {
+    error_message = rc_error_str(result);
+    callback(result, error_message, NULL, client, callback_userdata);
+    return NULL;
+  }
+
+  callback_data = (rc_client_fetch_game_list_callback_data_t*)calloc(1, sizeof(*callback_data));
+  if (!callback_data) {
+    callback(RC_OUT_OF_MEMORY, rc_error_str(RC_OUT_OF_MEMORY), NULL, client, callback_userdata);
+    return NULL;
+  }
+
+  callback_data->client = client;
+  callback_data->callback = callback;
+  callback_data->callback_userdata = callback_userdata;
+
+  async_handle = &callback_data->async_handle;
+  rc_client_begin_async(client, async_handle);
+  client->callbacks.server_call(&request, rc_client_fetch_game_list_callback, callback_data, client);
+  rc_api_destroy_request(&request);
+
+  return rc_client_async_handle_valid(client, async_handle) ? async_handle : NULL;
+}
+
+void rc_client_destroy_game_list(rc_client_game_list_t* list)
+{
+  free(list);
+}
+
 /* ===== Achievements ===== */
 
 static void rc_client_update_achievement_display_information(rc_client_t* client, rc_client_achievement_info_t* achievement, time_t recent_unlock_time)
@@ -3642,7 +4137,7 @@ static void rc_client_update_achievement_display_information(rc_client_t* client
           if (!achievement->trigger->measured_as_percent) {
             char* ptr = achievement->public_.measured_progress;
             const int buffer_size = (int)sizeof(achievement->public_.measured_progress);
-            const int chars = rc_format_value(ptr, buffer_size, (int32_t)new_measured_value, RC_FORMAT_UNSIGNED_VALUE);
+            const int chars = rc_format_value(ptr, buffer_size - 1, (int32_t)new_measured_value, RC_FORMAT_UNSIGNED_VALUE);
             ptr[chars] = '/';
             rc_format_value(ptr + chars + 1, buffer_size - chars - 1, (int32_t)achievement->trigger->measured_target, RC_FORMAT_UNSIGNED_VALUE);
           }
@@ -4035,6 +4530,62 @@ const rc_client_achievement_t* rc_client_get_achievement_info(rc_client_t* clien
   return NULL;
 }
 
+const rc_client_achievement_t* rc_client_get_next_achievement_info(rc_client_t* client,
+    const rc_client_achievement_t* achievement, int bucket)
+{
+  const rc_client_achievement_info_t* after = (const rc_client_achievement_info_t*)achievement;
+  rc_client_achievement_info_t* achievement_info;
+  time_t recent_unlock_time;
+  rc_client_subset_info_t* subset;
+
+  if (!client)
+    return NULL;
+
+#ifdef RC_CLIENT_SUPPORTS_EXTERNAL
+  if (client->state.external_client && client->state.external_client->get_next_achievement_info)
+    return client->state.external_client->get_next_achievement_info(achievement ? achievement->id : 0, bucket);
+#endif
+
+  if (!client->game)
+    return NULL;
+
+  recent_unlock_time = time(NULL) - RC_CLIENT_RECENT_UNLOCK_DELAY_SECONDS;
+  for (subset = client->game->subsets; subset; subset = subset->next) {
+    if (subset->active && subset->public_.num_achievements > 0) {
+      const rc_client_achievement_info_t* start = subset->achievements;
+      const rc_client_achievement_info_t* stop = start + subset->public_.num_achievements;
+      if (after == NULL || (after >= start && after <= stop)) {
+        /* found a subset containing the provided achievement. look for the next
+         * achievement matching the requested bucket */
+        uint32_t index = after ? (uint32_t)(after - start) + 1 : 0;
+        do {
+          if (index >= subset->public_.num_achievements) {
+            /* done with this subset. find the next active subset with achievements */
+            do {
+              subset = subset->next;
+              if (!subset)
+                return NULL;
+            } while (!subset->active || subset->public_.num_achievements == 0);
+
+            index = 0;
+          }
+
+          /* found an achievement. check to see if it matches the requested bucket. */
+          achievement_info = &subset->achievements[index];
+          rc_client_update_achievement_display_information(client, achievement_info, recent_unlock_time);
+          if (achievement_info->public_.bucket == bucket)
+            return &achievement_info->public_;
+
+          ++index;
+        } while (1);
+      }
+    }
+  }
+
+  return NULL;
+}
+
+
 int rc_client_achievement_get_image_url(const rc_client_achievement_t* achievement, int state, char buffer[], size_t buffer_size)
 {
   const int image_type = (state == RC_CLIENT_ACHIEVEMENT_STATE_UNLOCKED) ?
@@ -4044,12 +4595,20 @@ int rc_client_achievement_get_image_url(const rc_client_achievement_t* achieveme
     return rc_client_get_image_url(buffer, buffer_size, image_type, "00000");
 
   if (image_type == RC_IMAGE_TYPE_ACHIEVEMENT && achievement->badge_url) {
-    snprintf(buffer, buffer_size, "%s", achievement->badge_url);
+    const size_t len = strlen(achievement->badge_url);
+    if (len >= buffer_size)
+      return RC_INSUFFICIENT_BUFFER;
+
+    memcpy(buffer, achievement->badge_url, len + 1);
     return RC_OK;
   }
 
   if (image_type == RC_IMAGE_TYPE_ACHIEVEMENT_LOCKED && achievement->badge_locked_url) {
-    snprintf(buffer, buffer_size, "%s", achievement->badge_locked_url);
+    const size_t len = strlen(achievement->badge_locked_url);
+    if (len >= buffer_size)
+      return RC_INSUFFICIENT_BUFFER;
+
+    memcpy(buffer, achievement->badge_locked_url, len + 1);
     return RC_OK;
   }
 
@@ -4256,6 +4815,11 @@ static void rc_client_award_achievement(rc_client_t* client, rc_client_achieveme
 
   rc_mutex_unlock(&client->state.mutex);
 
+  if (achievement->public_.id >= RC_CLIENT_ACHIEVEMENT_WARNING_ID) {
+    RC_CLIENT_LOG_INFO_FORMATTED(client, "Unlocked warning achievement %u: %s", achievement->public_.id, achievement->public_.title);
+    return;
+  }
+
   if (client->callbacks.can_submit_achievement_unlock &&
       !client->callbacks.can_submit_achievement_unlock(achievement->public_.id, client)) {
     RC_CLIENT_LOG_INFO_FORMATTED(client, "Achievement %u unlock blocked by client", achievement->public_.id);
@@ -4283,7 +4847,6 @@ static void rc_client_award_achievement(rc_client_t* client, rc_client_achieveme
   callback_data->client = client;
   callback_data->id = achievement->public_.id;
   callback_data->hardcore = client->state.hardcore;
-  callback_data->game_hash = client->game->public_.hash;
   callback_data->unlock_time = client->callbacks.get_time_millisecs(client);
 
   if (client->game) /* may be NULL if this gets called while unloading the game (from another thread - events are raised outside the lock) */
@@ -4598,6 +5161,7 @@ int rc_client_has_leaderboards(rc_client_t* client)
 {
   rc_client_subset_info_t* subset;
   int result;
+  uint32_t i;
 
   if (!client)
     return 0;
@@ -4612,17 +5176,21 @@ int rc_client_has_leaderboards(rc_client_t* client)
 
   rc_mutex_lock(&client->state.mutex);
 
-  subset = client->game->subsets;
   result = 0;
-  for (; subset; subset = subset->next)
+  for (subset = client->game->subsets; subset; subset = subset->next)
   {
     if (!subset->active)
       continue;
 
-    if (subset->public_.num_leaderboards > 0) {
-      result = 1;
-      break;
+    for (i = 0; i < subset->public_.num_leaderboards; ++i) {
+      if (!subset->leaderboards[i].hidden) {
+        result = 1;
+        break;
+      }
     }
+
+    if (result)
+      break;
   }
 
   rc_mutex_unlock(&client->state.mutex);
@@ -5160,30 +5728,44 @@ static void rc_client_ping(rc_client_scheduled_callback_data_t* callback_data, r
   char buffer[256];
   int result;
 
-  if (!client->callbacks.rich_presence_override ||
-      !client->callbacks.rich_presence_override(client, buffer, sizeof(buffer))) {
-    rc_mutex_lock(&client->state.mutex);
+  /* if no frames have been processed since the last ping, the emulator is idle. let the
+   * server session expire. it will be resumed/restarted once frames start getting
+   * processed again. */
+  if (client->state.frames_processed != client->state.frames_at_last_ping) {
+    client->state.frames_at_last_ping = client->state.frames_processed;
 
-    rc_runtime_get_richpresence(&client->game->runtime, buffer, sizeof(buffer),
-        client->state.legacy_peek, client, NULL);
+    memset(&api_params, 0, sizeof(api_params));
+    api_params.username = client->user.username;
+    api_params.api_token = client->user.token;
+    api_params.game_id = client->game->public_.id;
+    api_params.rich_presence = buffer;
+    api_params.game_hash = client->game->public_.hash;
+    api_params.hardcore = client->state.hardcore;
 
-    rc_mutex_unlock(&client->state.mutex);
-  }
+    if (!client->callbacks.rich_presence_override ||
+        !client->callbacks.rich_presence_override(client, buffer, sizeof(buffer))) {
+      rc_mutex_lock(&client->state.mutex);
 
-  memset(&api_params, 0, sizeof(api_params));
-  api_params.username = client->user.username;
-  api_params.api_token = client->user.token;
-  api_params.game_id = client->game->public_.id;
-  api_params.rich_presence = buffer;
-  api_params.game_hash = client->game->public_.hash;
-  api_params.hardcore = client->state.hardcore;
+      rc_runtime_get_richpresence(&client->game->runtime, buffer, sizeof(buffer),
+          client->state.legacy_peek, client, NULL);
 
-  result = rc_api_init_ping_request_hosted(&request, &api_params, &client->state.host);
-  if (result != RC_OK) {
-    RC_CLIENT_LOG_WARN_FORMATTED(client, "Error generating ping request: %s", rc_error_str(result));
-  }
-  else {
-    client->callbacks.server_call(&request, rc_client_ping_callback, client, client);
+      rc_mutex_unlock(&client->state.mutex);
+    }
+
+    /* there's a miniscule chance the game will be changed out while we're waiting for the lock.
+     * if that happens, discard this ping. the new game will have scheduled its own ping.
+     * don't reschedule this one. */
+    if (!client->game || client->game->public_.id != api_params.game_id) {
+      return;
+    }
+
+    result = rc_api_init_ping_request_hosted(&request, &api_params, &client->state.host);
+    if (result != RC_OK) {
+      RC_CLIENT_LOG_WARN_FORMATTED(client, "Error generating ping request: %s", rc_error_str(result));
+    }
+    else {
+      client->callbacks.server_call(&request, rc_client_ping_callback, client, client);
+    }
   }
 
   callback_data->when = now + 120 * 1000;
@@ -5441,9 +6023,6 @@ static void rc_client_update_memref_values(rc_client_t* client) {
     } while (modified_memref_list);
   }
 
-  if (client->game->runtime.richpresence && client->game->runtime.richpresence->richpresence)
-    rc_update_values(client->game->runtime.richpresence->richpresence->values, client->state.legacy_peek, client);
-
   if (invalidated_memref)
     rc_client_update_active_achievements(client->game);
 }
@@ -5473,6 +6052,7 @@ static void rc_client_do_frame_process_achievements(rc_client_t* client, rc_clie
     /* if the measured value changed and the achievement hasn't triggered, show a progress indicator */
     if (trigger->measured_value != old_measured_value && old_measured_value != RC_MEASURED_UNKNOWN &&
         trigger->measured_value <= trigger->measured_target &&
+        trigger->measured_target != 0 &&
         rc_trigger_state_active(new_state) && new_state != RC_TRIGGER_STATE_WAITING) {
 
       /* only show a popup for the achievement closest to triggering */
@@ -5885,6 +6465,8 @@ void rc_client_do_frame(rc_client_t* client)
     rc_mutex_unlock(&client->state.mutex);
 
     rc_client_raise_pending_events(client, client->game);
+
+    ++client->state.frames_processed;
   }
 
   /* we've processed a frame. if there's a pause delay in effect, process it */

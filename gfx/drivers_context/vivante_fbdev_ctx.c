@@ -101,29 +101,28 @@ error:
 }
 
 static void gfx_ctx_vivante_get_video_size(void *data,
-      unsigned *width, unsigned *height)
+      unsigned *dims)
 {
    vivante_ctx_data_t *viv = (vivante_ctx_data_t*)data;
 
 #ifdef HAVE_EGL
-   egl_get_video_size(&viv->egl, width, height);
+   egl_get_video_size(&viv->egl, dims);
 #endif
 }
 
 static void gfx_ctx_vivante_check_window(void *data, bool *quit,
-      bool *resize, unsigned *width, unsigned *height)
+      bool *resize, unsigned *dims)
 {
-   unsigned new_width, new_height;
+   unsigned new_dims;
    vivante_ctx_data_t *viv = (vivante_ctx_data_t*)data;
 
 #ifdef HAVE_EGL
-   gfx_ctx_vivante_get_video_size(&viv->egl, &new_width, &new_height);
+   gfx_ctx_vivante_get_video_size(&viv->egl, &new_dims);
 #endif
 
-   if (new_width != *width || new_height != *height)
+   if (new_dims != *dims)
    {
-      *width               = new_width;
-      *height              = new_height;
+      *dims               = new_dims;
       *resize              = true;
    }
 
@@ -131,9 +130,11 @@ static void gfx_ctx_vivante_check_window(void *data, bool *quit,
 }
 
 static bool gfx_ctx_vivante_set_video_mode(void *data,
-      unsigned width, unsigned height,
+      unsigned dims,
       bool fullscreen)
 {
+   unsigned width  = VIDEO_SCALE_W(dims);
+   unsigned height = VIDEO_SCALE_H(dims);
 #ifdef HAVE_EGL
    static const EGLint attribs[] = {
       EGL_CONTEXT_CLIENT_VERSION, 2, /* Use version 2, even for GLES3. */
@@ -157,7 +158,7 @@ static bool gfx_ctx_vivante_set_video_mode(void *data,
 #endif
    viv->native_window = fbCreateWindow(fbGetDisplayByIndex(0), 0, 0, 0, 0);
 #ifdef HAVE_EGL
-   if (!egl_create_surface(&viv->egl, viv->native_window))
+   if (!egl_create_surface(&viv->egl, (void*)viv->native_window))
       goto error;
 #endif
 
@@ -225,6 +226,26 @@ static uint32_t gfx_ctx_vivante_get_flags(void *data)
    return flags;
 }
 
+static bool gfx_ctx_vivante_create_surface(void *data)
+{
+#ifdef HAVE_EGL
+   vivante_ctx_data_t *viv = (vivante_ctx_data_t*)data;
+   return egl_create_surface(&viv->egl, (void*)viv->native_window);
+#else
+   return false;
+#endif
+}
+
+static bool gfx_ctx_vivante_destroy_surface(void *data)
+{
+#ifdef HAVE_EGL
+   vivante_ctx_data_t *viv = (vivante_ctx_data_t*)data;
+   return egl_destroy_surface(&viv->egl);
+#else
+   return false;
+#endif
+}
+
 const gfx_ctx_driver_t gfx_ctx_vivante_fbdev = {
    gfx_ctx_vivante_init,
    gfx_ctx_vivante_destroy,
@@ -260,5 +281,7 @@ const gfx_ctx_driver_t gfx_ctx_vivante_fbdev = {
    gfx_ctx_vivante_set_flags,
    gfx_ctx_vivante_bind_hw_render,
    NULL,
-   NULL
+   NULL,
+   gfx_ctx_vivante_create_surface,
+   gfx_ctx_vivante_destroy_surface
 };

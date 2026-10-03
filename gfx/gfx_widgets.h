@@ -21,10 +21,10 @@
 #endif
 
 #include <retro_common_api.h>
+#include <retro_atomic.h>
 #include <formats/image.h>
 #include <queues/task_queue.h>
 #include <queues/message_queue.h>
-#include <queues/fifo_queue.h>
 
 #ifdef HAVE_THREADS
 #include <rthreads/rthreads.h>
@@ -116,17 +116,18 @@ enum disp_widget_flags_enum
    DISPWIDG_FLAG_DYING                     = (1 << 4),
    /* Has the timer expired ? if so, should be set to dying */
    DISPWIDG_FLAG_EXPIRED                   = (1 << 5),
-   /* Unfold animation */
-   DISPWIDG_FLAG_UNFOLDED                  = (1 << 6),
-   DISPWIDG_FLAG_UNFOLDING                 = (1 << 7),
    /* Color style */
-   DISPWIDG_FLAG_POSITIVE                  = (1 << 8),
-   DISPWIDG_FLAG_NEGATIVE                  = (1 << 9),
-   DISPWIDG_FLAG_CATEGORY_WARNING          = (1 << 10),
-   DISPWIDG_FLAG_CATEGORY_ERROR            = (1 << 11),
-   DISPWIDG_FLAG_CATEGORY_SUCCESS          = (1 << 12),
+   DISPWIDG_FLAG_POSITIVE                  = (1 << 6),
+   DISPWIDG_FLAG_NEGATIVE                  = (1 << 7),
+   DISPWIDG_FLAG_CATEGORY_WARNING          = (1 << 8),
+   DISPWIDG_FLAG_CATEGORY_ERROR            = (1 << 9),
+   DISPWIDG_FLAG_CATEGORY_SUCCESS          = (1 << 10),
    /* Size */
-   DISPWIDG_FLAG_SMALL                     = (1 << 13)
+   DISPWIDG_FLAG_SMALL                     = (1 << 11),
+   /* Was this widget spawned by a task? Sticky for the lifetime of
+    * the widget; unlike task_ptr, which is a liveness link that may
+    * legitimately be cleared while the widget is still on screen. */
+   DISPWIDG_FLAG_TASK                      = (1 << 12)
 };
 
 /* There can only be one message animation at a time to
@@ -151,7 +152,13 @@ typedef struct
    float line_ascender;
    float line_descender;
    float line_centre_offset;
+   /* font_driver generation the values above were computed at. A font
+    * rebuilt underneath - a language switch picks a different face -
+    * moves the generation and they are worked out again. */
+   uint32_t metrics_generation;
 } gfx_widget_font_data_t;
+
+void gfx_widgets_font_sync(gfx_widget_font_data_t *font_data);
 
 /* Font data */
 typedef struct
@@ -183,19 +190,61 @@ typedef struct disp_widget_msg
 
    uint16_t flags;
    int8_t task_progress;
-   /* How many tasks have used this notification? */
-   uint8_t task_count;
    bool alternative_look;
 } disp_widget_msg_t;
 
 typedef struct dispgfx_widget
 {
-   uint64_t gfx_widgets_frame_count;
-
 #ifdef HAVE_THREADS
-   slock_t* current_msgs_lock;
+   /* Serialises producer and consumer access to msg_queue.
+    * Producers (gfx_widgets_msg_queue_push) can be called from
+    * any thread, and no caller holds any other lock across the
+    * call (the runloop message queue is main-thread state with no
+    * lock at all; its off-main producers ride a deferral).  The
+    * consumer is whichever thread owns the widgets: the threaded
+    * video worker when it draws them, the main thread otherwise.
+    * msg_queue_lock guards the pending ring (msg_queue[] /
+    * msg_queue_head / msg_queue_count) and is held across every
+    * push and pop of it.  The displayed messages (current_msgs[])
+    * belong to that same owning thread alone and take no lock. */
+   slock_t* msg_queue_lock;
+   /* Everything the widgets draw. With the threaded video wrapper the
+    * worker animates, iterates and draws it while the main thread's
+    * setters, task updates and relayout change it, so both sides hold
+    * this: the worker across its step and its draw, a writer across its
+    * change. Outermost of the widget locks. Recursive for
+    * its owner through state_owner/state_depth, and released for as
+    * long as its owner waits on the worker (gfx_widgets_state_yield()),
+    * so a writer that loads or frees a texture cannot deadlock against
+    * a draw waiting for it. Untouched without the wrapper. */
+   slock_t* state_lock;
+   retro_atomic_size_t state_owner;
+   unsigned state_depth;
+   /* The threaded video worker animates and lays out the widgets
+    * (gfx_widgets_worker_step()). Set at init and cleared at deinit,
+    * when neither thread is in the widgets; a field of its own rather
+    * than a bit in 'flags', which the main thread read-modify-writes
+    * while the worker would read this. */
+   /* The video singleton's stable address, captured at
+    * gfx_widgets_init on the main thread before the draw worker
+    * exists: the worker's step and the state-lock dispatch reach
+    * ra-video state through this, never through the getter. */
+   void *video_st;
+   bool worker;
 #endif
-   fifo_buffer_t msg_queue;
+   /* Messages pushed but not yet on screen: a ring of pointers,
+    * pushed from any thread (gfx_widgets_msg_queue_push), popped by
+    * the thread that owns the widgets, one per frame.  Was a
+    * fifo_buffer_t carrying sizeof(pointer)-byte records: a heap
+    * buffer, byte arithmetic and a write that silently wrapped when
+    * full, for what is a bounded array of MSG_QUEUE_PENDING_MAX
+    * pointers.  Several producers, so this is not an SPSC ring and
+    * stays under msg_queue_lock.  msg_queue_count is written only
+    * under it; the consumer reads it without, so a frame with nothing
+    * pending takes no lock at all. */
+   disp_widget_msg_t* msg_queue[MSG_QUEUE_PENDING_MAX];
+   unsigned msg_queue_head;
+   retro_atomic_int_t msg_queue_count;
    disp_widget_msg_t* current_msgs[MSG_QUEUE_ONSCREEN_MAX];
    gfx_widget_fonts_t gfx_widget_fonts; /* ptr alignment */
 
@@ -212,11 +261,15 @@ typedef struct dispgfx_widget
    size_t current_msgs_size;
 
 #ifdef HAVE_TRANSLATE
-   int ai_service_overlay_state;
+   /* ai_service_overlay_state moved out of this struct: the video
+    * thread advances 2 -> 3 in gfx_widgets_frame() while the main
+    * thread drives every other transition, so it needs release/acquire
+    * rather than a plain int.  Kept out of the struct so the atomic
+    * type is not exposed in this header. */
 #endif
 
-   unsigned last_video_width;
-   unsigned last_video_height;
+   /* Both axes in one word, VIDEO_SCALE_PACK's layout. */
+   unsigned last_video_dims;
    unsigned msg_queue_kill;
    /* Count of messages bound to a task in current_msgs */
    unsigned msg_queue_tasks_count;
@@ -230,14 +283,11 @@ typedef struct dispgfx_widget
    unsigned msg_queue_spacing;
    unsigned msg_queue_rect_start_x;
    unsigned msg_queue_internal_icon_size;
-   unsigned msg_queue_internal_icon_offset;
    unsigned msg_queue_icon_size_x;
    unsigned msg_queue_icon_size_y;
    unsigned msg_queue_icon_offset_y;
    unsigned msg_queue_scissor_start_x;
-   unsigned msg_queue_default_rect_width_menu_alive;
    unsigned msg_queue_default_rect_width;
-   unsigned msg_queue_regular_padding_x;
    unsigned msg_queue_regular_text_start;
    unsigned msg_queue_task_text_start_x;
    unsigned divider_width_1px;
@@ -247,23 +297,49 @@ typedef struct dispgfx_widget
    float msg_queue_bg[16];
    float pure_white[16];
 #ifdef HAVE_TRANSLATE
-   unsigned ai_service_overlay_width;
-   unsigned ai_service_overlay_height;
+   unsigned ai_service_overlay_dims;
 #endif
 
    uint8_t flags;
+   /* Kept next to 'flags' rather than at the end of the struct.  It is
+    * read once or twice per frame from the video and runloop paths
+    * (gfx/video_driver.c, runloop.c) while nothing else near the tail
+    * is touched, so at the end it cost a cache line of its own that
+    * carried a single byte; here it shares the line 'flags' already
+    * pulls in every frame for gfx_widgets_frame().  It lands in
+    * padding that existed anyway ahead of the status text, so this
+    * costs nothing: sizeof(dispgfx_widget_t) drops by 8, because the
+    * byte and its trailing pad at the end of the struct are
+    * reclaimed.  Its address is taken as an opaque animation tag in
+    * retroarch.c -- only uniqueness matters there, not the value. */
+   bool active;
 
    char gfx_widgets_status_text[NAME_MAX_LENGTH];
+   /* Cached strlen of gfx_widgets_status_text, written by the
+    * producer in video_driver.c.  Lets the per-frame widget render
+    * skip a strlen on a string that can be up to NAME_MAX_LENGTH
+    * (256) bytes long when statistics or core status messages are
+    * active.  Zero means the buffer is empty. */
+   size_t gfx_widgets_status_text_len;
    char assets_pkg_dir[DIR_MAX_LENGTH];
    char xmb_path[PATH_MAX_LENGTH];                /* TODO/FIXME - decouple from XMB */
    char ozone_path[PATH_MAX_LENGTH];              /* TODO/FIXME - decouple from Ozone */
    char ozone_regular_font_path[PATH_MAX_LENGTH]; /* TODO/FIXME - decouple from Ozone */
    char ozone_bold_font_path[PATH_MAX_LENGTH];    /* TODO/FIXME - decouple from Ozone */
 
+   /* The notification font path the widget fonts are built from.
+    * gfx_widgets_iterate() watches it alongside last_scale_factor and
+    * rebuilds them in place when it moves. */
+   char last_font_path[PATH_MAX_LENGTH];
+
    char monochrome_png_path[PATH_MAX_LENGTH];
    char gfx_widgets_path[PATH_MAX_LENGTH];
 
-   bool active;
+   /* The menu state the frame being iterated was built with. A widget
+    * that wants to know whether the menu is open reads this rather
+    * than the menu's own flags: those are a read-modify-write on the
+    * main thread, and an iterate runs on the thread that draws. */
+   uint16_t frame_menu_st_flags;
 } dispgfx_widget_t;
 
 /* A widget */
@@ -283,7 +359,7 @@ struct gfx_widget
    /* called when the graphics context is reset
     * -> (re)load the textures here */
    void (*context_reset)(bool is_threaded,
-      unsigned width, unsigned height, bool fullscreen,
+      unsigned dims, bool fullscreen,
       const char *dir_assets, char *font_path,
       char* menu_png_path,
       char* widgets_png_path);
@@ -300,7 +376,7 @@ struct gfx_widget
    /* called every frame on the main thread
     * -> update the widget logic here */
    void (*iterate)(void *user_data,
-      unsigned width, unsigned height, bool fullscreen,
+      unsigned dims, bool fullscreen,
       const char *dir_assets, char *font_path,
       bool is_threaded);
 
@@ -310,19 +386,21 @@ struct gfx_widget
     * -- userdata is a dispgfx_widget_t
     * -> draw the widget here */
    void (*frame)(void* data, void *userdata);
+
+   /* called to check if the widget is currently
+    * drawing anything on screen
+    * -> return true if the widget is active */
+   bool (*visible)(void);
 };
 
 float gfx_widgets_get_thumbnail_scale_factor(
-      const float dst_width, const float dst_height,
-      const float image_width, const float image_height);
+      unsigned dst_dims, unsigned image_dims);
 
 void gfx_widgets_draw_icon(
       void *userdata,
       void *data_disp,
-      unsigned video_width,
-      unsigned video_height,
-      unsigned icon_width,
-      unsigned icon_height,
+      unsigned video_dims,
+      unsigned icon_dims,
       uintptr_t texture,
       float x, float y,
       float radians,
@@ -330,17 +408,19 @@ void gfx_widgets_draw_icon(
       float sine,
       float *color);
 
+/* @dims: the output size, both axes in one word,
+ * VIDEO_SCALE_PACK's layout. */
 void gfx_widgets_draw_text(
       gfx_widget_font_data_t* font_data,
       const char *text,
       float x, float y,
-      int width, int height,
+      unsigned dims,
       uint32_t color,
       enum text_alignment text_align,
       bool draw_outside);
 
 void gfx_widgets_flush_text(
-      unsigned video_width, unsigned video_height,
+      unsigned video_dims,
       gfx_widget_font_data_t* font_data);
 
 typedef struct gfx_widget gfx_widget_t;
@@ -351,7 +431,7 @@ bool gfx_widgets_init(
       void *settings_data,
       uintptr_t widgets_active_ptr,
       bool video_is_threaded,
-      unsigned width, unsigned height, bool fullscreen,
+      unsigned dims, bool fullscreen,
       const char *dir_assets, char *font_path);
 
 void gfx_widgets_deinit(bool widgets_persisting);
@@ -372,7 +452,7 @@ void gfx_widget_volume_update_and_show(float new_volume,
 void gfx_widgets_iterate(
       void *data_disp,
       void *settings_data,
-      unsigned width, unsigned height, bool fullscreen,
+      unsigned dims, bool fullscreen,
       const char *dir_assets, char *font_path,
       bool is_threaded);
 
@@ -389,6 +469,13 @@ bool gfx_widgets_ai_service_overlay_load(
       enum image_type_enum image_type);
 
 void gfx_widgets_ai_service_overlay_unload(void);
+
+/* AI service overlay handshake.  0 idle, 1 texture loaded, 2 awaiting a
+ * frame, 3 drawn once.  Only the 2 -> 3 step runs on the video thread;
+ * every other transition is main.  Acquire/release so the texture
+ * published before a transition is visible to the observer. */
+int  gfx_widgets_ai_service_overlay_get_state(void);
+void gfx_widgets_ai_service_overlay_set_state(int state);
 #endif
 
 #ifdef HAVE_CHEEVOS
@@ -406,6 +493,10 @@ void gfx_widget_set_cheevos_set_loading(bool visible);
 /* TODO/FIXME/WARNING: Not thread safe! */
 void gfx_widget_set_generic_message(
       const char *message, unsigned duration);
+void gfx_widget_set_generic_message_fixed(const char *prefix,
+      const char *name, const char *suffix, const char *slot,
+      unsigned duration);
+void gfx_widget_set_generic_message_progress(const char *label);
 void gfx_widget_set_libretro_message(
       const char *message, unsigned duration);
 void gfx_widget_set_progress_message(
@@ -413,10 +504,48 @@ void gfx_widget_set_progress_message(
       unsigned priority, int8_t progress);
 bool gfx_widget_start_load_content_animation(void);
 
+/* Percentage shown after the content name while the content is still
+ * being read, or -1 for none. */
+void gfx_widget_set_load_content_progress(int8_t progress);
+
 /* All the functions below should be called in
  * the video driver - once they are all added, set
  * enable_menu_widgets to true for that driver */
+#ifdef HAVE_THREADS
+void gfx_widgets_state_lock(void);
+void gfx_widgets_state_unlock(void);
+unsigned gfx_widgets_state_yield(void);
+void gfx_widgets_state_resume(unsigned depth);
+#else
+#define gfx_widgets_state_lock()     ((void)0)
+#define gfx_widgets_state_unlock()   ((void)0)
+#endif
+
 void gfx_widgets_frame(void *data);
+
+#ifdef HAVE_THREADS
+/* Threaded video worker, before the driver's frame: what the runloop
+ * does for the widgets without the wrapper, less the layout. */
+void gfx_widgets_worker_step(void *data,
+      const char *status_text, size_t status_text_len);
+
+/* Main thread, under the wrapper: hands the on-screen panels' text to
+ * the frame about to be pushed, for gfx_widgets_worker_step(), and
+ * clears status_text, which video_driver_frame() would otherwise write
+ * into widget state after the push. */
+void gfx_widgets_status_text_to_frame(void *data, char *status_text);
+
+/* The main thread's part of gfx_widgets_iterate() while the worker
+ * runs the rest: relayout on a screen, scale or font change. */
+void gfx_widgets_iterate_layout(
+      void *data_disp,
+      void *settings_data,
+      unsigned dims, bool fullscreen,
+      const char *dir_assets, char *font_path,
+      bool is_threaded);
+#endif
+
+bool gfx_widgets_visible(void *data);
 
 bool gfx_widgets_ready(void);
 

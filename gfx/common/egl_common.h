@@ -83,12 +83,15 @@ gfx_ctx_proc_t egl_get_proc_address(const char *symbol);
 void egl_terminate(EGLDisplay dpy);
 
 void egl_bind_hw_render(egl_ctx_data_t *egl, bool enable);
+/* Make no context current on the calling thread; see
+ * gfx_ctx_driver_t::release_current. */
+void egl_release_current(egl_ctx_data_t *egl);
 
 void egl_swap_buffers(void *data);
 
 void egl_set_swap_interval(egl_ctx_data_t *egl, int interval);
 
-void egl_get_video_size(egl_ctx_data_t *egl, unsigned *width, unsigned *height);
+void egl_get_video_size(egl_ctx_data_t *egl, unsigned *dims);
 
 typedef bool (*egl_accept_config_cb_t)(void *display_data, EGLDisplay dpy, EGLConfig config);
 bool egl_default_accept_config_cb(void *display_data, EGLDisplay dpy, EGLConfig config);
@@ -117,6 +120,8 @@ bool egl_bind_api(EGLenum egl_api);
 bool egl_create_context(egl_ctx_data_t *egl, const EGLint *egl_attribs);
 
 bool egl_create_surface(egl_ctx_data_t *egl, void *native_window);
+
+bool egl_destroy_surface(egl_ctx_data_t *egl);
 
 bool egl_get_native_visual_id(egl_ctx_data_t *egl, EGLint *value);
 

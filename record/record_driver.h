@@ -4,6 +4,8 @@
 #include <boolean.h>
 #include <retro_miscellaneous.h>
 
+#include "../gfx/video_defines.h"   /* VIDEO_SCALE_PACK */
+
 enum ffemu_pix_format
 {
    FFEMU_PIX_RGB565 = 0,
@@ -16,6 +18,7 @@ enum streaming_mode
    STREAMING_MODE_TWITCH = 0,
    STREAMING_MODE_YOUTUBE,
    STREAMING_MODE_FACEBOOK,
+   STREAMING_MODE_KICK,
    STREAMING_MODE_LOCAL,
    STREAMING_MODE_CUSTOM
 };
@@ -86,8 +89,8 @@ struct record_params
 struct record_video_data
 {
    const void *data;
-   unsigned width;
-   unsigned height;
+   /* Both axes in one word, VIDEO_SCALE_PACK's layout. */
+   unsigned dims;
    int pitch;
    bool is_dupe;
 };
@@ -116,11 +119,19 @@ struct recording
    const record_driver_t *driver;
    void *data;
 
-   size_t gpu_width;
-   size_t gpu_height;
+   /* The viewport the GPU recording was opened at, both axes in one
+    * word - VIDEO_SCALE_PACK's layout, so a resize is one comparison
+    * against a freshly packed viewport rather than two. */
+   unsigned gpu_dims;
 
-   unsigned width;
-   unsigned height;
+   /* --size's override of the recording's output size, same layout;
+    * zero when it was not given, which is one test instead of two. */
+   unsigned out_dims;
+   /* The speaker layout the recorder was opened with (an AUDIO_LAYOUT_
+    * mask): stereo, or the core's own wider layout when it had one at
+    * the start of the recording. Every push is brought to it. */
+   uint32_t layout;
+   unsigned channels;
 
    char path[PATH_MAX_LENGTH];
    char config[PATH_MAX_LENGTH];

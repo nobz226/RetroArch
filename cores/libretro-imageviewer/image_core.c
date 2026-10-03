@@ -11,7 +11,7 @@
 
 #include <streams/file_stream.h>
 
-#if defined(HAVE_RPNG) || defined(HAVE_RJPEG) || defined(HAVE_RTGA) || defined(HAVE_RBMP)
+#if defined(HAVE_RPNG) || defined(HAVE_RJPEG) || defined(HAVE_RTGA) || defined(HAVE_RBMP) || defined(HAVE_RWEBP) || defined(HAVE_RDDS)
 #define PREFER_NON_STB_IMAGE
 #endif
 
@@ -26,12 +26,7 @@
 #define STBI_NO_PNM
 #endif
 #define STBI_SUPPORT_ZLIB
-
-#ifdef RARCH_INTERNAL
-#include "../../deps/stb/stb_image.h"
-#else
-#include <stb_image.h>
-#endif
+#include "stb_image.h"
 #else
 #include <formats/image.h>
 #endif
@@ -40,6 +35,8 @@
 
 #ifdef RARCH_INTERNAL
 #include "internal_cores.h"
+#include "../../gfx/video_driver.h"
+#include "../../gfx/gfx_surface.h"
 #define IMAGE_CORE_PREFIX(s) libretro_imageviewer_##s
 #else
 #define IMAGE_CORE_PREFIX(s) s
@@ -89,7 +86,15 @@ static const char image_formats[] =
 "|tga"
 #endif
 
-#if !defined(HAVE_RJPEG) && !defined(HAVE_RPNG) && !defined(HAVE_RBMP) && !defined(HAVE_RTGA)
+#ifdef HAVE_RWEBP
+"|webp"
+#endif
+
+#ifdef HAVE_RDDS
+"|dds"
+#endif
+
+#if !defined(HAVE_RJPEG) && !defined(HAVE_RPNG) && !defined(HAVE_RBMP) && !defined(HAVE_RTGA) && !defined(HAVE_RWEBP) && !defined(HAVE_RDDS)
 #error "can't build this core with no image formats"
 #endif
 ;
@@ -101,8 +106,8 @@ static const char* IMAGE_CORE_PREFIX(valid_extensions) = image_formats + 1;
 
 void IMAGE_CORE_PREFIX(retro_get_system_info)(struct retro_system_info *info)
 {
-   info->library_name     = "image display";
-   info->library_version  = "v0.1";
+   info->library_name     = "Image Viewer";
+   info->library_version  = "";
    info->need_fullpath    = true;
    info->block_extract    = false;
    info->valid_extensions = IMAGE_CORE_PREFIX(valid_extensions);
@@ -214,7 +219,7 @@ static bool imageviewer_load(const char *path, int image_index)
    void* buf;
 #endif
 #ifdef RARCH_INTERNAL
-   extern bool video_driver_supports_rgba(void);
+   extern uint32_t video_driver_get_disp_flags(void);
 #endif
 
    imageviewer_free_image();
@@ -233,7 +238,11 @@ static bool imageviewer_load(const char *path, int image_index)
    free(buf);
 #else
 #ifdef RARCH_INTERNAL
-   image_texture.supports_rgba = video_driver_supports_rgba();
+   {
+      gfx_surface_requirements_t req;
+      if (gfx_surface_query_requirements(0, &req))
+         image_texture.supports_rgba = req.rgba;
+   }
 #endif
    if (!image_texture_load(&image_texture, path))
       return false;

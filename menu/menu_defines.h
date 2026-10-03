@@ -51,7 +51,11 @@ enum menu_state_flags
    MENU_ST_FLAG_SCREENSAVER_ACTIVE          = (1 << 11),
    MENU_ST_FLAG_PENDING_RELOAD_CORE         = (1 << 12),
    MENU_ST_FLAG_PENDING_STARTUP_PAGE        = (1 << 13),
-   MENU_ST_FLAG_BLOCK_ALL_INPUT             = (1 << 14)
+   MENU_ST_FLAG_BLOCK_ALL_INPUT             = (1 << 14),
+   /* When enabled, a configuration file load (full driver/menu
+    * reinit) has been requested and will be performed on the next
+    * frame, outside of menu iteration */
+   MENU_ST_FLAG_PENDING_CONFIG_REPLACE      = (1 << 15)
 };
 
 enum menu_scroll_mode
@@ -72,6 +76,7 @@ enum action_iterate_type
    ITERATE_TYPE_DEFAULT = 0,
    ITERATE_TYPE_HELP,
    ITERATE_TYPE_INFO,
+   ITERATE_TYPE_CONFIRM,
    ITERATE_TYPE_BIND
 };
 
@@ -240,6 +245,7 @@ enum rgui_color_theme
    RGUI_THEME_DYNAMIC,
    RGUI_THEME_GRAY_DARK,
    RGUI_THEME_GRAY_LIGHT,
+   RGUI_THEME_EVERGARDEN,
    RGUI_THEME_LAST
 };
 
@@ -269,6 +275,7 @@ enum materialui_color_theme
    MATERIALUI_THEME_HACKING_THE_KERNEL,
    MATERIALUI_THEME_GRAY_DARK,
    MATERIALUI_THEME_GRAY_LIGHT,
+   MATERIALUI_THEME_DRACULA,
    MATERIALUI_THEME_LAST
 };
 
@@ -352,6 +359,14 @@ enum xmb_icon_theme
    XMB_ICON_THEME_LAST
 };
 
+enum xmb_current_menu_icon
+{
+   XMB_CURRENT_MENU_ICON_NONE = 0,
+   XMB_CURRENT_MENU_ICON_NORMAL,
+   XMB_CURRENT_MENU_ICON_TITLE,
+   XMB_CURRENT_MENU_ICON_LAST
+};
+
 enum xmb_shader_pipeline
 {
 #ifndef HAVE_PSGL
@@ -412,6 +427,7 @@ enum rgui_aspect_ratio
    RGUI_ASPECT_RATIO_5_3,
    RGUI_ASPECT_RATIO_5_3_CENTRE,
    RGUI_ASPECT_RATIO_AUTO,
+   RGUI_ASPECT_RATIO_1_1,
    RGUI_ASPECT_RATIO_LAST
 };
 
@@ -451,7 +467,16 @@ enum ozone_color_theme
    OZONE_COLOR_THEME_GRAY_LIGHT,
    OZONE_COLOR_THEME_PURPLE_RAIN,
    OZONE_COLOR_THEME_SELENIUM,
+   OZONE_COLOR_THEME_EVERGARDEN,
    OZONE_COLOR_THEME_LAST
+};
+
+enum ozone_header_icon
+{
+   OZONE_HEADER_ICON_NONE = 0,
+   OZONE_HEADER_ICON_DYNAMIC,
+   OZONE_HEADER_ICON_FIXED,
+   OZONE_HEADER_ICON_LAST
 };
 
 enum ozone_header_separator
@@ -555,13 +580,7 @@ enum menu_dialog_type
    MENU_DIALOG_NONE = 0,
    MENU_DIALOG_WELCOME,
    MENU_DIALOG_HELP_EXTRACT,
-   MENU_DIALOG_HELP_CONTROLS,
    MENU_DIALOG_HELP_CHEEVOS_DESCRIPTION,
-   MENU_DIALOG_HELP_LOADING_CONTENT,
-   MENU_DIALOG_HELP_WHAT_IS_A_CORE,
-   MENU_DIALOG_HELP_CHANGE_VIRTUAL_GAMEPAD,
-   MENU_DIALOG_HELP_AUDIO_VIDEO_TROUBLESHOOTING,
-   MENU_DIALOG_HELP_SCANNING_CONTENT,
    MENU_DIALOG_QUIT_CONFIRM,
    MENU_DIALOG_INFORMATION,
    MENU_DIALOG_QUESTION,
@@ -581,6 +600,11 @@ struct menu_dialog
 {
    unsigned              current_id;
    enum menu_dialog_type current_type;
+   unsigned              confirm_msg;
+   unsigned              confirm_cmd;
+   unsigned              pending_cmd;
+   bool                  confirm_hover_ok;
+   bool                  confirm_hover_back;
    bool                  pending_push;
 };
 

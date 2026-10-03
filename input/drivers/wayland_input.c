@@ -24,6 +24,10 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 
+#ifdef HAVE_WAYLAND_BACKPORT
+#include "../../gfx/common/wayland_common_backport.h"
+#endif
+
 #include <wayland-client.h>
 #include <wayland-cursor.h>
 
@@ -40,6 +44,9 @@
 
 #include "../common/linux_common.h"
 #include "../common/wayland_common.h"
+#ifdef WEBOS
+#include "../common/wayland_common_webos.h"
+#endif
 
 #include "../../retroarch.h"
 #include "../../verbosity.h"
@@ -170,7 +177,7 @@ static int16_t input_wl_state(
 
             for (i = 0; i < RARCH_FIRST_CUSTOM_BIND; i++)
             {
-               if (binds[port][i].valid)
+               if (RETRO_KEYBIND_VALID(&binds[port][i]))
                {
                   /*if (wl_mouse_button_pressed(udev, port, binds[port][i].mbutton))
                      ret |= (1 << i);
@@ -184,10 +191,10 @@ static int16_t input_wl_state(
             {
                for (i = 0; i < RARCH_FIRST_CUSTOM_BIND; i++)
                {
-                  if (binds[port][i].valid)
+                  if (RETRO_KEYBIND_VALID(&binds[port][i]))
                   {
-                     if (     (binds[port][i].key && binds[port][i].key < RETROK_LAST)
-                           && BIT_GET(wl->key_state, rarch_keysym_lut[binds[port][i].key]))
+                     if (     (RETRO_KEYBIND_KEY(&binds[port][i]) && RETRO_KEYBIND_KEY(&binds[port][i]) < RETROK_LAST)
+                           && BIT_GET(wl->key_state, rarch_keysym_lut[RETRO_KEYBIND_KEY(&binds[port][i])]))
                         ret |= (1 << i);
                   }
                }
@@ -198,10 +205,10 @@ static int16_t input_wl_state(
 
          if (id < RARCH_BIND_LIST_END)
          {
-            if (binds[port][id].valid)
+            if (RETRO_KEYBIND_VALID(&binds[port][id]))
             {
-               if (     (binds[port][id].key && binds[port][id].key < RETROK_LAST)
-                     && BIT_GET(wl->key_state, rarch_keysym_lut[binds[port][id].key])
+               if (     (RETRO_KEYBIND_KEY(&binds[port][id]) && RETRO_KEYBIND_KEY(&binds[port][id]) < RETROK_LAST)
+                     && BIT_GET(wl->key_state, rarch_keysym_lut[RETRO_KEYBIND_KEY(&binds[port][id])])
                      && (id == RARCH_GAME_FOCUS_TOGGLE || !keyboard_mapping_blocked)
                   )
                   return 1;
@@ -226,10 +233,10 @@ static int16_t input_wl_state(
 
             input_conv_analog_id_to_bind_id(idx, id, id_minus, id_plus);
 
-            id_minus_valid        = binds[port][id_minus].valid;
-            id_plus_valid         = binds[port][id_plus].valid;
-            id_minus_key          = binds[port][id_minus].key;
-            id_plus_key           = binds[port][id_plus].key;
+            id_minus_valid        = RETRO_KEYBIND_VALID(&binds[port][id_minus]);
+            id_plus_valid         = RETRO_KEYBIND_VALID(&binds[port][id_plus]);
+            id_minus_key          = RETRO_KEYBIND_KEY(&binds[port][id_minus]);
+            id_plus_key           = RETRO_KEYBIND_KEY(&binds[port][id_plus]);
 
             if (id_plus_valid && id_plus_key && id_plus_key < RETROK_LAST)
             {
@@ -248,6 +255,14 @@ static int16_t input_wl_state(
          }
          break;
       case RETRO_DEVICE_KEYBOARD:
+#ifdef WEBOS
+         if ((id && id < RETROK_LAST) && (id == RETROK_BACKSPACE) &&
+             webos_wl_special_keymap[webos_wl_key_back] == WL_KEYBOARD_KEY_STATE_PRESSED)
+         {
+            webos_wl_special_keymap[webos_wl_key_back] = 0;
+            return true;
+         }
+#endif
          return (id && id < RETROK_LAST) && BIT_GET(wl->key_state, rarch_keysym_lut[(enum retro_key)id]);
       case RETRO_DEVICE_MOUSE:
       case RARCH_DEVICE_MOUSE_SCREEN:
