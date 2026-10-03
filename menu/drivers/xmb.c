@@ -2364,6 +2364,50 @@ static void xmb_set_dynamic_icon_content(
    }
 }
 
+/* Loads a playlist entry's icon thumbnail on the spot, as 1.22.2 did,
+ * so icons appear as entries scroll into view instead of waiting for
+ * the stream delay to run out on an entry that holds still. */
+static bool xmb_load_dynamic_icon(const char *icon_path,
+      gfx_thumbnail_t *icon)
+{
+   struct texture_image ti;
+
+   if (!icon_path || !*icon_path)
+      return false;
+
+   /* Weird unwanted state */
+   if (     icon->status == GFX_THUMBNAIL_STATUS_UNKNOWN
+         && icon->texture > 0)
+      gfx_thumbnail_reset(icon);
+
+   ti.width         = 0;
+   ti.height        = 0;
+   ti.pixels        = NULL;
+   ti.supports_rgba = gfx_surface_wants_rgba();
+   ti.pix10         = false;
+
+   if (!image_texture_load(&ti, icon_path))
+      return false;
+
+   if (!video_driver_texture_load(&ti, TEXTURE_FILTER_MIPMAP_LINEAR,
+            &icon->texture))
+   {
+      image_texture_free(&ti);
+      return false;
+   }
+
+   icon->dims        = VIDEO_SCALE_PACK(ti.width, ti.height);
+   image_texture_free(&ti);
+
+   icon->alpha       = 0.0f;
+   icon->delay_timer = 0.0f;
+   icon->flags      &= ~(GFX_THUMB_FLAG_FADE_ACTIVE
+                       | GFX_THUMB_FLAG_CORE_ASPECT);
+   icon->status      = GFX_THUMBNAIL_STATUS_AVAILABLE;
+
+   return true;
+}
+
 static void xmb_update_savestate_thumbnail_image(void *data)
 {
    xmb_handle_t *xmb          = (xmb_handle_t*)data;
@@ -8388,23 +8432,14 @@ static void xmb_render(void *data,
    /* Handle any pending icon thumbnail load requests */
    if (xmb->thumbnails.pending_icons != XMB_PENDING_THUMBNAIL_NONE)
    {
-      /* Walk the visible range and dispatch async stream requests for
-       * each unresolved entry-> We deliberately do NOT sync-load on
-       * the main thread here. Doing so blocks the main thread long
-       * enough (PNG/JPEG decode + GPU texture upload, repeated for
-       * 10–20 entries) that the runloop misses several
-       * gfx_animation_update ticks — the next tick advances
-       * delta_time by the full elapsed wall-clock and tween easing
-       * functions evaluate near or past their duration, snapping
-       * any in-flight animation to its end state. The visible
-       * effect: the enter-playlist or tab-switch animation jumps
-       * straight to the end on the load frame.
-       *
-       * Async decode + upload runs on a worker thread and lands via
-       * task callback over the next several frames, keeping the
-       * main thread responsive and animations smooth. Path
-       * resolution stays inline (it's a few stat syscalls per
-       * unresolved entry, cheap enough not to block a frame). */
+      /* Walk the visible range. Up to two entries per frame load their
+       * icon on the spot, as in 1.22.2, so icons appear while the list
+       * scrolls; an icon that cannot be loaded that way falls back to
+       * an async stream request. Path resolution stays lazy and
+       * inline (a few stat syscalls per unresolved entry). */
+      uint8_t max_per_frame = 2;
+      uint8_t cur_per_frame = 0;
+
       if (VIDEO_SCALE_H(dims))
          xmb_calculate_visible_range(xmb, VIDEO_SCALE_H(dims), end, (unsigned)selection, &first, &last);
 
@@ -8438,6 +8473,22 @@ static void xmb_render(void *data,
           * population, eliminates the repeat cost on scroll. */
          if (!*thumbnail_icon->thumbnail_path_data.icon_path)
             xmb_set_dynamic_icon_content(xmb, NULL, i, thumbnail_icon);
+
+         /* As 1.22.2 did: load up to two icons per frame on the spot,
+          * so they appear while the list scrolls. The rest wait for a
+          * later frame. */
+         if (cur_per_frame >= max_per_frame)
+         {
+            xmb->thumbnails.pending_icons = XMB_PENDING_THUMBNAIL_ICONS;
+            continue;
+         }
+         if (xmb_load_dynamic_icon(
+                  thumbnail_icon->thumbnail_path_data.icon_path,
+                  &thumbnail_icon->icon))
+         {
+            cur_per_frame++;
+            continue;
+         }
 
          /* Dispatch async. gfx_thumbnail_request_stream tolerates an
           * empty icon_path: it transitions status to MISSING on the
