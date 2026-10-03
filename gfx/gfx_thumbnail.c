@@ -1064,41 +1064,6 @@ static void gfx_thumbnail_anim_shown(gfx_thumbnail_t *thumbnail,
  * again; the animation may also have closed meanwhile, in which case
  * there is no job and the surface simply keeps its last frame. */
 
-/* A still's upload, through the same surface ownership the animation
- * frames use: the image the load task decoded is handed to a surface
- * that holds the texture, and the surface releases the image when the
- * upload has been taken. The thumbnail owns the surface, so a reset
- * while an upload is in flight frees it through the completion rather
- * than through a ticket of its own. Returns false when nothing was
- * uploaded. */
-static void gfx_thumbnail_still_release(void *user, gfx_surface_t *s,
-      unsigned slot)
-{
-   gfx_thumbnail_t *thumbnail         = (gfx_thumbnail_t*)user;
-   gfx_thumbnail_state_t *p_gfx_thumb = &gfx_thumb_st;
-   struct texture_image *img          = (struct texture_image*)s->user_img;
-
-   (void)slot;
-   if (img)
-   {
-      image_texture_free(img);
-      free(img);
-      s->user_img = NULL;
-   }
-   if (!s->handle)
-   {
-      if (GFX_THUMB_STATUS_LOAD(&thumbnail->status)
-            == GFX_THUMBNAIL_STATUS_PENDING)
-      {
-         GFX_THUMB_STATUS_STORE(&thumbnail->status,
-               GFX_THUMBNAIL_STATUS_MISSING);
-         gfx_thumbnail_init_fade(p_gfx_thumb, thumbnail);
-      }
-      return;
-   }
-   gfx_thumbnail_anim_shown(thumbnail, s);
-}
-
 static void gfx_thumbnail_anim_slot_release(void *user, gfx_surface_t *s,
       unsigned slot)
 {
@@ -1649,50 +1614,25 @@ static void gfx_thumbnail_handle_upload(
       goto end;
    }
 
-   /* The still goes to a surface the thumbnail owns: under threaded
-    * video the submit hands the image to the video thread and the
-    * status stays PENDING until the release installs the texture and
-    * starts the fade; without it the submit uploads here and now. The
-    * animation below is opened either way, and its first frame
-    * replaces the still if it arrives first. */
+   /* Upload the still to the GPU directly, as 1.22.2 did. The surface
+    * route this replaces marked the thumbnail MISSING for good whenever
+    * the submit did not complete (no surface, or BUSY while an earlier
+    * upload was still in flight), so artwork went missing while
+    * scrolling a playlist. gfx_thumbnail_reset() unloads a texture the
+    * thumbnail holds without a surface, and an animation's first frame
+    * still replaces this texture through gfx_thumbnail_anim_shown(). */
+   fade_enabled = true;
+   if (video_driver_texture_load(img, TEXTURE_FILTER_MIPMAP_LINEAR,
+            &thumbnail_tag->thumbnail->texture))
    {
-      gfx_surface_t *s = VIDEO_SCALE_FITS(img->width, img->height)
-         ? gfx_thumbnail_anim_surface(thumbnail_tag->thumbnail,
-            VIDEO_SCALE_PACK(img->width, img->height), 0)
-         : NULL;
-      enum gfx_surface_submit_result r = GFX_SURFACE_SUBMIT_FAILED;
-
-      if (s)
-      {
-         s->user_img = img;
-         r = gfx_surface_submit_external(s, img->pixels,
-               img->supports_rgba, gfx_thumbnail_still_release,
-               thumbnail_tag->thumbnail);
-      }
-      if (r == GFX_SURFACE_SUBMIT_QUEUED)
-      {
-         /* Dimensions now, so layout does not wait for the handle. */
-         thumbnail_tag->thumbnail->dims   = VIDEO_SCALE_PACK(
-               img->width, img->height);
-         img = NULL;    /* the surface frees it from its release */
-         goto open_anim;
-      }
-      if (r == GFX_SURFACE_SUBMIT_DONE)
-      {
-         s->user_img = NULL;
-         fade_enabled = true;
-         gfx_thumbnail_anim_shown(thumbnail_tag->thumbnail, s);
-         goto open_anim;
-      }
-      /* No surface, or the driver refused the upload: the thumbnail
-       * has nothing to show, and the fade below reports that. The
-       * image is still the task's and is freed at the end. */
-      if (s)
-         s->user_img = NULL;
+      thumbnail_tag->thumbnail->dims = VIDEO_SCALE_PACK(
+            img->width, img->height);
+      GFX_THUMB_STATUS_STORE(&thumbnail_tag->thumbnail->status,
+            GFX_THUMBNAIL_STATUS_AVAILABLE);
+   }
+   else
       GFX_THUMB_STATUS_STORE(&thumbnail_tag->thumbnail->status,
             GFX_THUMBNAIL_STATUS_MISSING);
-      fade_enabled = true;
-   }
 
 open_anim:
 
