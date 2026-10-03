@@ -2483,6 +2483,19 @@ bool runloop_environment_cb(unsigned cmd, void *data)
                *cb = RETRO_HW_CONTEXT_D3D12;
                RARCH_LOG("[Environ] GET_PREFERRED_HW_RENDER: RETRO_HW_CONTEXT_D3D12.\n");
             }
+#if defined(__APPLE__) && defined(HAVE_VULKAN)
+            else if (memcmp(video_driver_name, "metal", sizeof("metal")) == 0)
+            {
+               /* Metal is no context a core can render into, so a core
+                * that asks would otherwise fall back to macOS's
+                * deprecated OpenGL and the glcore driver. Point it at
+                * Vulkan (MoltenVK) instead: the driver switch then runs
+                * it on the Vulkan driver, the same path it takes when
+                * Vulkan is the configured driver. */
+               *cb = RETRO_HW_CONTEXT_VULKAN;
+               RARCH_LOG("[Environ] GET_PREFERRED_HW_RENDER: RETRO_HW_CONTEXT_VULKAN.\n");
+            }
+#endif
             else
             {
                *cb = RETRO_HW_CONTEXT_NONE;
