@@ -2235,6 +2235,24 @@ retry:
             semaphore, fence, &vk->context.current_swapchain_index);
    }
 
+#ifdef __APPLE__
+   /* MoltenVK signals the acquire fence from the drawable's presented
+    * handler, and macOS drops those for a window that goes hidden
+    * (alt-tab, another Space) with presents in flight. Waiting forever
+    * froze the main thread for good. Give up after a quarter of a
+    * second and rebuild the swapchain as if it were out of date. The
+    * fence is left alive on purpose: the old image may still signal it. */
+   if (     (err == VK_SUCCESS || err == VK_SUBOPTIMAL_KHR)
+         && fence != VK_NULL_HANDLE
+         && vkWaitForFences(vk->context.device, 1, &fence, true,
+               250000000ull) == VK_TIMEOUT)
+   {
+      RARCH_WARN("[Vulkan] Swapchain image never came back, rebuilding swapchain.\n");
+      fence = VK_NULL_HANDLE;
+      err   = VK_ERROR_OUT_OF_DATE_KHR;
+   }
+#endif
+
    if (err == VK_SUCCESS || err == VK_SUBOPTIMAL_KHR)
    {
       if (fence != VK_NULL_HANDLE)
