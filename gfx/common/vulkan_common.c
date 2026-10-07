@@ -3441,7 +3441,21 @@ void vulkan_context_destroy(gfx_ctx_vulkan_data_t *vk,
       return;
 
    if (vk->context.device)
+   {
+      /* vkDeviceWaitIdle() does not drain everything. MoltenVK with
+       * asynchronous queue submission (MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS
+       * off, which a core can ask for through the instance's layer
+       * settings) runs submissions and presents on its own dispatch
+       * queue, and its wait-idle only waits for work that has already
+       * reached Metal. A present still queued there ran after the
+       * swapchain below was gone and crashed in
+       * presentCAMetalDrawable when content closed. That queue is in
+       * order, so an empty submission's fence signals once everything
+       * queued before it has run. */
+      vk->context.present_pending = true;
+      vulkan_context_wait_frames(vk);
       vkDeviceWaitIdle(vk->context.device);
+   }
    /* Drained above; the fence would only be waited on again. */
    vk->context.present_pending = false;
 
