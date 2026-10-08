@@ -23,6 +23,7 @@
 #include <fcntl.h>
 
 #include <sys/utsname.h>
+#include <sys/xattr.h>
 
 #include <mach/mach.h>
 #include <dlfcn.h>
@@ -371,6 +372,92 @@ static size_t frontend_darwin_get_os(char *s, size_t len, int *major, int *minor
    return _len;
 }
 
+#if TARGET_OS_OSX
+/* Maps "Application Support/RetroArch/..." and "Documents/RetroArch/..." inside
+ * the seed to the matching folders on this Mac. */
+static NSString *frontend_darwin_seed_target(NSString *rel,
+      NSString *app_data, NSString *docs)
+{
+   if ([rel hasPrefix:@"Application Support/RetroArch"])
+      return [app_data stringByAppendingString:
+         [rel substringFromIndex:[@"Application Support/RetroArch" length]]];
+   if ([rel hasPrefix:@"Documents/RetroArch"])
+      return [docs stringByAppendingString:
+         [rel substringFromIndex:[@"Documents/RetroArch" length]]];
+   return nil;
+}
+
+/* A private build can carry the owner's setup in Contents/Resources/seed:
+ * "Application Support/RetroArch" goes to application_data and
+ * "Documents/RetroArch" to the documents folder. It runs before the config
+ * is read and only when this Mac has no retroarch.cfg yet, so an existing
+ * setup is never touched, and it never replaces a file that is already
+ * there. Files listed in seed/home-paths.txt get "@HOME@" replaced with the
+ * user's home folder, for settings that cannot use "~". */
+static void frontend_darwin_install_seed(const char *application_data,
+      const char *documents_dir)
+{
+   @autoreleasepool
+   {
+      NSFileManager *fm  = [NSFileManager defaultManager];
+      NSString *seed     = [[[NSBundle mainBundle] resourcePath]
+         stringByAppendingPathComponent:@"seed"];
+      NSString *app_data = [NSString stringWithUTF8String:application_data];
+      NSString *docs     = [NSString stringWithUTF8String:documents_dir];
+      NSString *list;
+      NSString *rel;
+      NSDirectoryEnumerator *it;
+      BOOL is_dir        = NO;
+
+      if (![fm fileExistsAtPath:seed isDirectory:&is_dir] || !is_dir)
+         return;
+      if ([fm fileExistsAtPath:[app_data
+            stringByAppendingPathComponent:@"config/retroarch.cfg"]])
+         return;
+
+      RARCH_LOG("[Seed] No config yet, installing the bundled setup.\n");
+      it = [fm enumeratorAtPath:seed];
+      while ((rel = [it nextObject]))
+      {
+         NSString *from = [seed stringByAppendingPathComponent:rel];
+         NSString *to   = frontend_darwin_seed_target(rel, app_data, docs);
+         if (!to)
+            continue;
+         if ([fm fileExistsAtPath:from isDirectory:&is_dir] && is_dir)
+         {
+            [fm createDirectoryAtPath:to withIntermediateDirectories:YES
+               attributes:nil error:nil];
+            continue;
+         }
+         if ([fm fileExistsAtPath:to])
+            continue;
+         if ([fm copyItemAtPath:from toPath:to error:nil])
+            /* Cores copied out of a downloaded app would otherwise be
+             * refused by Gatekeeper when they are loaded. */
+            removexattr([to fileSystemRepresentation],
+                  "com.apple.quarantine", XATTR_NOFOLLOW);
+      }
+
+      list = [NSString stringWithContentsOfFile:
+         [seed stringByAppendingPathComponent:@"home-paths.txt"]
+         encoding:NSUTF8StringEncoding error:nil];
+      for (NSString *line in [list componentsSeparatedByCharactersInSet:
+            [NSCharacterSet newlineCharacterSet]])
+      {
+         NSString *path = frontend_darwin_seed_target(line, app_data, docs);
+         NSString *text = path ? [NSString stringWithContentsOfFile:path
+            encoding:NSUTF8StringEncoding error:nil] : nil;
+         if (text)
+            [[text stringByReplacingOccurrencesOfString:@"@HOME@"
+               withString:NSHomeDirectory()]
+               writeToFile:path atomically:YES
+               encoding:NSUTF8StringEncoding error:nil];
+      }
+      RARCH_LOG("[Seed] Done.\n");
+   }
+}
+#endif
+
 static void frontend_darwin_get_env(int *argc, char *argv[],
       void *args, void *params_data)
 {
@@ -423,6 +510,11 @@ static void frontend_darwin_get_env(int *argc, char *argv[],
    strlcat(documents_dir_buf, "/RetroArch", sizeof(documents_dir_buf));
    /* iOS and tvOS are going to put everything in the documents dir */
    strlcpy(application_data, documents_dir_buf, sizeof(application_data));
+#endif
+
+#if TARGET_OS_OSX
+   if (!portable)
+      frontend_darwin_install_seed(application_data, documents_dir_buf);
 #endif
 
    /* By the time we are here:
