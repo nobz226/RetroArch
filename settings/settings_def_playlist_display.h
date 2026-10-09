@@ -56,6 +56,11 @@ S_BOOL(playlist_portable_paths, PLAYLIST_PORTABLE_PATHS,
       DEFAULT_PLAYLIST_PORTABLE_PATHS, SD_FLAG_NONE, 0, 0,
       "Portable Playlists",
       "When enabled, and 'File Browser' directory is also selected, the current value of parameter 'File Browser' is saved in the playlist. When the playlist is loaded on another system where the same option is enabled, the value of parameter 'File Browser' is compared with the playlist value; if different, the playlist entries' paths are automatically fixed.")
+S_BOOL(playlist_refresh_on_launch, PLAYLIST_REFRESH_ON_LAUNCH,
+      "playlist_refresh_on_launch",
+      DEFAULT_PLAYLIST_REFRESH_ON_LAUNCH, SD_FLAG_NONE, 0, 0,
+      "Refresh Playlists on Launch",
+      "When RetroArch starts, refresh every playlist that was created by a scan, so content added to its scan directory appears without using 'Refresh Playlist'. Playlists whose scan directory is not available are left unchanged.")
 S_BOOL(playlist_use_filename, PLAYLIST_USE_FILENAME,
       "playlist_use_filename",
       DEFAULT_PLAYLIST_USE_FILENAME, SD_FLAG_NONE, 0, 0,

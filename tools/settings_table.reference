@@ -198,6 +198,7 @@ bool	playlist_fuzzy_archive_match	1	0
 bool	scan_without_core_match	1	0
 bool	scan_serial_and_crc	1	0
 bool	playlist_portable_paths	1	0
+bool	playlist_refresh_on_launch	1	1
 bool	playlist_use_filename	1	0
 bool	playlist_allow_non_png	1	0
 bool	cheevos_visibility_unlock	1	1
@@ -863,6 +864,7 @@ bool	playlist_fuzzy_archive_match	1	0
 bool	scan_without_core_match	1	0
 bool	scan_serial_and_crc	1	0
 bool	playlist_portable_paths	1	0
+bool	playlist_refresh_on_launch	1	1
 bool	playlist_use_filename	1	0
 bool	playlist_allow_non_png	1	0
 bool	cheevos_visibility_unlock	1	1
@@ -1533,6 +1535,7 @@ bool	playlist_fuzzy_archive_match	1	0
 bool	scan_without_core_match	1	0
 bool	scan_serial_and_crc	1	0
 bool	playlist_portable_paths	1	0
+bool	playlist_refresh_on_launch	1	1
 bool	playlist_use_filename	1	0
 bool	playlist_allow_non_png	1	0
 bool	cheevos_visibility_unlock	1	1

@@ -1761,6 +1761,9 @@
 
 #define DEFAULT_PLAYLIST_ALLOW_NON_PNG false
 
+/* Refresh every playlist that has a scan record when RetroArch starts */
+#define DEFAULT_PLAYLIST_REFRESH_ON_LAUNCH true
+
 /* Show Menu start-up screen on boot. */
 #define DEFAULT_MENU_SHOW_START_SCREEN true
 

@@ -8983,6 +8983,19 @@ bool retroarch_main_init(int argc, char *argv[])
    game_ai_init();
 #endif
 
+   /* Once per session: this init also runs on every content load.
+    * Pushed after retroarch_init_task_queue() above, which would
+    * otherwise drop the scans. */
+   {
+      static bool playlists_refreshed = false;
+      if (!playlists_refreshed)
+      {
+         playlists_refreshed = true;
+         if (settings->bools.playlist_refresh_on_launch)
+            task_push_playlist_refresh_all();
+      }
+   }
+
    global->flags &= ~GLOB_FLG_INIT_IN_PROGRESS;
    return true;
 

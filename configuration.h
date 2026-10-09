@@ -1089,6 +1089,7 @@ typedef struct settings
       bool playlist_portable_paths;
       bool playlist_use_filename;
       bool playlist_allow_non_png;
+      bool playlist_refresh_on_launch;
 
       bool confirm_quit;
       bool confirm_close;

@@ -3587,8 +3587,8 @@ static bool task_manual_content_scan_finder(retro_task_t *task, void *user_data)
          (const char*)user_data, manual_scan->playlist_config.path);
 }
 
-bool task_push_manual_content_scan(
-      bool do_menu_refresh,
+static bool task_push_manual_content_scan_internal(
+      bool do_menu_refresh, bool mute,
       retro_task_callback_t user_cb)
 {
    size_t _len;
@@ -3716,6 +3716,8 @@ bool task_push_manual_content_scan(
    task->callback                = cb_task_manual_content_scan;
    task->cleanup                 = task_manual_content_scan_free;
    task->flags                  |= RETRO_TASK_FLG_ALTERNATIVE_LOOK;
+   if (mute)
+      task->flags               |= RETRO_TASK_FLG_MUTE;
 
    /* > Push task */
    task_queue_push(task);
@@ -3729,4 +3731,79 @@ error:
    RARCH_ERR("[Scanner] Task creation failed\n");
 
    return false;
+}
+
+bool task_push_manual_content_scan(
+      bool do_menu_refresh,
+      retro_task_callback_t user_cb)
+{
+   return task_push_manual_content_scan_internal(
+         do_menu_refresh, false, user_cb);
+}
+
+/* Refreshes every playlist in the playlist directory that has a scan
+ * record, the way 'Refresh Playlist' does, with the scans muted. A
+ * playlist whose scan directory is not available - a drive that is not
+ * connected - is skipped, so its entries are left as they are. */
+void task_push_playlist_refresh_all(void)
+{
+   size_t i;
+   struct string_list *list = NULL;
+   settings_t *settings     = config_get_ptr();
+   const char *playlist_dir = settings->paths.directory_playlist;
+   unsigned pushed          = 0;
+
+   if (!playlist_dir || !*playlist_dir)
+      return;
+   if (!(list = dir_list_new(playlist_dir, "lpl",
+         false, false, false, false)))
+      return;
+
+   for (i = 0; i < list->size; i++)
+   {
+      playlist_config_t playlist_config;
+      playlist_t *playlist     = NULL;
+      const char *path         = list->elems[i].data;
+      const char *name         = path_basename(path);
+      const char *content_dir  = NULL;
+
+      /* History and favourites are never scanned */
+      if (     string_is_equal(name, FILE_PATH_CONTENT_FAVORITES)
+            || string_is_equal(name, FILE_PATH_CONTENT_HISTORY)
+            || string_is_equal(name, FILE_PATH_CONTENT_IMAGE_HISTORY)
+            || string_is_equal(name, FILE_PATH_CONTENT_MUSIC_HISTORY)
+            || string_is_equal(name, FILE_PATH_CONTENT_VIDEO_HISTORY))
+         continue;
+
+      playlist_config_set_path(&playlist_config, path);
+      playlist_config.capacity            = COLLECTION_SIZE;
+      playlist_config.old_format          = settings->bools.playlist_use_old_format;
+      playlist_config.compress            = settings->bools.playlist_compression;
+      playlist_config.fuzzy_archive_match = settings->bools.playlist_fuzzy_archive_match;
+      playlist_config_set_base_content_directory(&playlist_config,
+            settings->bools.playlist_portable_paths
+            ? settings->paths.directory_menu_content : NULL);
+
+      if (!(playlist = playlist_init(&playlist_config)))
+         continue;
+
+      content_dir = playlist_get_scan_content_dir(playlist);
+      if (!content_dir || !*content_dir)
+         RARCH_DBG("[Playlist Refresh] No scan record: \"%s\".\n", name);
+      else if (!path_is_directory(content_dir))
+         RARCH_LOG("[Playlist Refresh] Skipping \"%s\", scan directory not found: \"%s\".\n",
+               name, content_dir);
+      else if (manual_content_scan_set_menu_from_playlist(playlist,
+               settings->paths.path_content_database,
+               settings->bools.show_hidden_files)
+            != MANUAL_CONTENT_SCAN_PLAYLIST_REFRESH_OK)
+         RARCH_WARN("[Playlist Refresh] Invalid scan record: \"%s\".\n", name);
+      else if (task_push_manual_content_scan_internal(false, true, NULL))
+         pushed++;
+
+      playlist_free(playlist);
+   }
+
+   string_list_free(list);
+   RARCH_LOG("[Playlist Refresh] Refreshing %u playlist(s) on launch.\n", pushed);
 }

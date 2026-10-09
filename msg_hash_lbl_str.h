@@ -1457,6 +1457,7 @@
 #define MENU_ENUM_LABEL_PLAYLIST_ENTRY_RENAME_STR "playlist_entry_rename"
 #define MENU_ENUM_LABEL_PLAYLIST_FUZZY_ARCHIVE_MATCH_STR "playlist_fuzzy_archive_match"
 #define MENU_ENUM_LABEL_PLAYLIST_PORTABLE_PATHS_STR "playlist_portable_paths"
+#define MENU_ENUM_LABEL_PLAYLIST_REFRESH_ON_LAUNCH_STR "playlist_refresh_on_launch"
 #define MENU_ENUM_LABEL_PLAYLIST_SETTINGS_STR "playlist_settings"
 #define MENU_ENUM_LABEL_PLAYLIST_SHOW_ENTRY_IDX_STR "playlist_show_entry_idx"
 #define MENU_ENUM_LABEL_PLAYLIST_SHOW_HISTORY_ICONS_STR "playlist_show_history_icons"
