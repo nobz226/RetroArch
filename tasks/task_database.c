@@ -21,6 +21,8 @@
 #include <retro_miscellaneous.h>
 #include <string/stdstring.h>
 #include <lists/dir_list.h>
+#include <features/features_cpu.h>
+#include <retro_timers.h>
 #include <memory/mem_stats.h>
 #include <lists/string_list.h>
 #include <file/file_path.h>
@@ -3741,25 +3743,55 @@ bool task_push_manual_content_scan(
          do_menu_refresh, false, user_cb);
 }
 
-static unsigned playlist_refresh_pending = 0;
-static bool playlist_refresh_announce    = false;
+#define PLAYLIST_REFRESH_READY_HOLD_US 5000000
 
-static void playlist_refresh_announce_ready(void)
+static volatile unsigned playlist_refresh_pending = 0;
+static retro_time_t playlist_refresh_ready_at     = 0;
+
+/* One notification for the end of a first-run setup: it says to wait
+ * while the playlists refresh, then turns into the ready message, which
+ * stays for a few seconds before it fades out. A plain message cannot be
+ * taken down early, so the 'wait' text would outlast the refresh. */
+static void task_first_run_setup_handler(retro_task_t *task)
 {
-   const char *_msg = "Ready to play, have fun!";
-   runloop_msg_queue_push(_msg, strlen(_msg), 2, 480, true, NULL,
-         MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_SUCCESS);
+   retro_time_t now;
+
+   if (playlist_refresh_pending)
+   {
+      if (task_queue_is_threaded())
+         retro_sleep(20);
+      return;
+   }
+
+   now = cpu_features_get_time_usec();
+   if (!playlist_refresh_ready_at)
+   {
+      playlist_refresh_ready_at = now;
+      task_set_title(task, strdup("Ready to play, have fun!"));
+   }
+   else if (now - playlist_refresh_ready_at >= PLAYLIST_REFRESH_READY_HOLD_US)
+      task_set_flags(task, RETRO_TASK_FLG_FINISHED, true);
+   else if (task_queue_is_threaded())
+      retro_sleep(20);
+}
+
+static void task_push_first_run_setup_notice(void)
+{
+   retro_task_t *task = task_init();
+   if (!task)
+      return;
+   playlist_refresh_ready_at = 0;
+   task->handler  = task_first_run_setup_handler;
+   task->title    = strdup("Finishing setup: updating your game playlists. Please wait...");
+   task->progress = -1;
+   task_queue_push(task);
 }
 
 static void cb_playlist_refresh_all(retro_task_t *task,
       void *task_data, void *user_data, const char *err)
 {
-   if (playlist_refresh_pending && !--playlist_refresh_pending
-         && playlist_refresh_announce)
-   {
-      playlist_refresh_announce = false;
-      playlist_refresh_announce_ready();
-   }
+   if (playlist_refresh_pending)
+      playlist_refresh_pending--;
 }
 
 /* Refreshes every playlist in the playlist directory that has a scan
@@ -3775,8 +3807,6 @@ void task_push_playlist_refresh_all(bool announce)
    settings_t *settings     = config_get_ptr();
    const char *playlist_dir = settings->paths.directory_playlist;
    unsigned pushed          = 0;
-
-   playlist_refresh_announce = announce;
 
    if (!playlist_dir || !*playlist_dir)
       return;
@@ -3839,14 +3869,6 @@ void task_push_playlist_refresh_all(bool announce)
    string_list_free(list);
    RARCH_LOG("[Playlist Refresh] Refreshing %u playlist(s) on launch.\n", pushed);
 
-   if (!announce)
-      return;
-   if (!pushed)
-      playlist_refresh_announce_ready();
-   else
-   {
-      const char *_msg = "Finishing setup: updating your game playlists. Please wait...";
-      runloop_msg_queue_push(_msg, strlen(_msg), 2, 3600, true, NULL,
-            MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_INFO);
-   }
+   if (announce)
+      task_push_first_run_setup_notice();
 }
