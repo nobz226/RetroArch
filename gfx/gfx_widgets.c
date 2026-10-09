@@ -565,7 +565,11 @@ static void gfx_widgets_msg_queue_push_state(
             msg_widget->flags &= ~DISPWIDG_FLAG_EXPIRATION_TIMER_STARTED;
          }
 
-         if (!string_is_equal(task->title, msg_widget->msg_new))
+         /* Compare with the text being shown when no change is pending:
+          * the transition clears msg_new, and comparing a renamed task's
+          * title with that NULL restarted the transition every frame. */
+         if (!string_is_equal(task->title,
+               msg_widget->msg_new ? msg_widget->msg_new : msg_widget->msg))
          {
             size_t _len;
             unsigned new_width;
