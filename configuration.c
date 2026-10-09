@@ -6353,6 +6353,44 @@ static void check_verbosity_settings(config_file_t *conf,
  * Loads a config file and reads all the values into memory.
  *
  */
+#if defined(__APPLE__) && defined(HAVE_MENU)
+#include <TargetConditionals.h>
+#if TARGET_OS_OSX
+#include <dirent.h>
+/* External drives mount at /Volumes/<name>. If a configured folder is on a drive
+ * that is not mounted under that name, look for the same folder on every mounted
+ * drive and use the first one that has it, so content and portable playlists
+ * follow a drive that was renamed or swapped for another with the same layout. */
+static void config_relocate_volume_path(char *path, size_t len)
+{
+   DIR *dir;
+   struct dirent *ent;
+   const char *rest;
+
+   if (strncmp(path, "/Volumes/", 9) || path_is_directory(path))
+      return;
+   if (!(rest = strchr(path + 9, '/')))
+      return;
+   if (!(dir = opendir("/Volumes")))
+      return;
+   while ((ent = readdir(dir)))
+   {
+      char candidate[PATH_MAX_LENGTH];
+      if (ent->d_name[0] == '.')
+         continue;
+      snprintf(candidate, sizeof(candidate), "/Volumes/%s%s", ent->d_name, rest);
+      if (path_is_directory(candidate))
+      {
+         RARCH_LOG("[Config] \"%s\" is not mounted, using \"%s\".\n", path, candidate);
+         strlcpy(path, candidate, len);
+         break;
+      }
+   }
+   closedir(dir);
+}
+#endif
+#endif
+
 static bool config_load_file(global_t *global,
       const char *path, settings_t *settings)
 {
@@ -7008,6 +7046,10 @@ static bool config_load_file(global_t *global,
 #ifdef HAVE_MENU
    if (string_is_equal(settings->paths.directory_menu_content, "default"))
       *settings->paths.directory_menu_content = '\0';
+#if defined(__APPLE__) && TARGET_OS_OSX
+   config_relocate_volume_path(settings->paths.directory_menu_content,
+         sizeof(settings->paths.directory_menu_content));
+#endif
    if (string_is_equal(settings->paths.directory_menu_config, "default"))
       *settings->paths.directory_menu_config = '\0';
 #endif
