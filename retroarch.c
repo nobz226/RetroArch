@@ -8501,6 +8501,13 @@ static bool retroarch_core_info_savestate_probe(void)
          && core_serialize_size() > 0;
 }
 
+static bool first_run_setup_installed = false;
+
+void retroarch_first_run_setup_installed(void)
+{
+   first_run_setup_installed = true;
+}
+
 bool retroarch_main_init(int argc, char *argv[])
 {
 #if defined(DEBUG) && defined(HAVE_DRMINGW)
@@ -8991,8 +8998,11 @@ bool retroarch_main_init(int argc, char *argv[])
       if (!playlists_refreshed)
       {
          playlists_refreshed = true;
-         if (settings->bools.playlist_refresh_on_launch)
-            task_push_playlist_refresh_all();
+         /* After a first-run setup the refresh runs regardless, so the
+          * playlists match the drive before the user is told to play */
+         if (     settings->bools.playlist_refresh_on_launch
+               || first_run_setup_installed)
+            task_push_playlist_refresh_all(first_run_setup_installed);
       }
    }
 

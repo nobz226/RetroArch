@@ -143,6 +143,10 @@ void retroarch_drain_tasks_for_exit(void);
  **/
 bool retroarch_main_init(int argc, char *argv[]);
 
+/* Called by a frontend that installed a bundled setup before the config was
+ * read, so the first session can tell the user when everything is ready. */
+void retroarch_first_run_setup_installed(void);
+
 bool retroarch_main_quit(void);
 
 global_t *global_get_ptr(void);

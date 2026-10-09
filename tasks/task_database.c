@@ -3741,17 +3741,42 @@ bool task_push_manual_content_scan(
          do_menu_refresh, false, user_cb);
 }
 
+static unsigned playlist_refresh_pending = 0;
+static bool playlist_refresh_announce    = false;
+
+static void playlist_refresh_announce_ready(void)
+{
+   const char *_msg = "Ready to play, have fun!";
+   runloop_msg_queue_push(_msg, strlen(_msg), 2, 480, true, NULL,
+         MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_SUCCESS);
+}
+
+static void cb_playlist_refresh_all(retro_task_t *task,
+      void *task_data, void *user_data, const char *err)
+{
+   if (playlist_refresh_pending && !--playlist_refresh_pending
+         && playlist_refresh_announce)
+   {
+      playlist_refresh_announce = false;
+      playlist_refresh_announce_ready();
+   }
+}
+
 /* Refreshes every playlist in the playlist directory that has a scan
  * record, the way 'Refresh Playlist' does, with the scans muted. A
  * playlist whose scan directory is not available - a drive that is not
- * connected - is skipped, so its entries are left as they are. */
-void task_push_playlist_refresh_all(void)
+ * connected - is skipped, so its entries are left as they are.
+ * With 'announce' (after a first-run setup) the user is told to wait,
+ * and told when every refresh has finished. */
+void task_push_playlist_refresh_all(bool announce)
 {
    size_t i;
    struct string_list *list = NULL;
    settings_t *settings     = config_get_ptr();
    const char *playlist_dir = settings->paths.directory_playlist;
    unsigned pushed          = 0;
+
+   playlist_refresh_announce = announce;
 
    if (!playlist_dir || !*playlist_dir)
       return;
@@ -3798,12 +3823,30 @@ void task_push_playlist_refresh_all(void)
                settings->bools.show_hidden_files)
             != MANUAL_CONTENT_SCAN_PLAYLIST_REFRESH_OK)
          RARCH_WARN("[Playlist Refresh] Invalid scan record: \"%s\".\n", name);
-      else if (task_push_manual_content_scan_internal(false, true, NULL))
-         pushed++;
+      else
+      {
+         playlist_refresh_pending++;
+         if (task_push_manual_content_scan_internal(false, true,
+                  cb_playlist_refresh_all))
+            pushed++;
+         else
+            playlist_refresh_pending--;
+      }
 
       playlist_free(playlist);
    }
 
    string_list_free(list);
    RARCH_LOG("[Playlist Refresh] Refreshing %u playlist(s) on launch.\n", pushed);
+
+   if (!announce)
+      return;
+   if (!pushed)
+      playlist_refresh_announce_ready();
+   else
+   {
+      const char *_msg = "Finishing setup: updating your game playlists. Please wait...";
+      runloop_msg_queue_push(_msg, strlen(_msg), 2, 3600, true, NULL,
+            MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_INFO);
+   }
 }

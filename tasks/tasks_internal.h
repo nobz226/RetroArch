@@ -282,7 +282,7 @@ bool task_push_manual_content_scan(
       bool do_menu_refresh,
       retro_task_callback_t user_cb);
 
-void task_push_playlist_refresh_all(void);
+void task_push_playlist_refresh_all(bool announce);
 
 #ifdef HAVE_OVERLAY
 bool task_push_overlay_load_default(

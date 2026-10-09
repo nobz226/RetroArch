@@ -44,6 +44,7 @@
 #endif
 
 #if TARGET_OS_OSX
+#import <AppKit/AppKit.h>
 #include <Carbon/Carbon.h>
 #include <IOKit/ps/IOPowerSources.h>
 #include <IOKit/ps/IOPSKeys.h>
@@ -394,6 +395,51 @@ static NSString *frontend_darwin_seed_target(NSString *rel,
  * setup is never touched, and it never replaces a file that is already
  * there. Files listed in seed/home-paths.txt get "@HOME@" replaced with the
  * user's home folder, for settings that cannot use "~". */
+/* The copy runs on a worker while the main thread shows this window, so the
+ * user sees what is happening: RetroArch's own window has nothing to draw yet
+ * and the copy takes about a minute. */
+static NSPanel *frontend_darwin_seed_window(NSTextField **status,
+      NSProgressIndicator **bar)
+{
+   NSPanel *win        = [[NSPanel alloc]
+      initWithContentRect:NSMakeRect(0, 0, 480, 160)
+      styleMask:NSWindowStyleMaskTitled
+      backing:NSBackingStoreBuffered defer:NO];
+   NSView *view        = [win contentView];
+   NSTextField *head   = [NSTextField labelWithString:
+      @"Setting up RetroArch for the first time"];
+   NSTextField *body   = [NSTextField wrappingLabelWithString:
+      @"Copying the cores, settings, artwork and saves. This takes about "
+      @"a minute. Please wait and don't close RetroArch."];
+
+   [win setTitle:@"RetroArch - MacOS-ARM-Nobz Edition"];
+   [win setLevel:NSFloatingWindowLevel];
+   [win setReleasedWhenClosed:NO];
+
+   [head setFont:[NSFont boldSystemFontOfSize:14]];
+   [head setFrame:NSMakeRect(20, 118, 440, 20)];
+   [body setFrame:NSMakeRect(20, 70, 440, 40)];
+
+   *bar = [[NSProgressIndicator alloc]
+      initWithFrame:NSMakeRect(20, 44, 440, 20)];
+   [*bar setIndeterminate:YES];
+   [*bar setUsesThreadedAnimation:YES];
+   [*bar startAnimation:nil];
+
+   *status = [NSTextField labelWithString:@"Getting ready..."];
+   [*status setFont:[NSFont systemFontOfSize:11]];
+   [*status setTextColor:[NSColor secondaryLabelColor]];
+   [*status setFrame:NSMakeRect(20, 16, 440, 18)];
+
+   [view addSubview:head];
+   [view addSubview:body];
+   [view addSubview:*bar];
+   [view addSubview:*status];
+   [win center];
+   [win makeKeyAndOrderFront:nil];
+   return win;
+}
+
 static void frontend_darwin_install_seed(const char *application_data,
       const char *documents_dir)
 {
@@ -405,9 +451,13 @@ static void frontend_darwin_install_seed(const char *application_data,
       NSString *app_data = [NSString stringWithUTF8String:application_data];
       NSString *docs     = [NSString stringWithUTF8String:documents_dir];
       NSString *list;
-      NSString *rel;
-      NSDirectoryEnumerator *it;
+      NSTextField *status;
+      NSProgressIndicator *bar;
+      NSPanel *win;
       BOOL is_dir        = NO;
+      __block volatile BOOL done        = NO;
+      __block volatile NSUInteger total  = 0;
+      __block volatile NSUInteger copied = 0;
 
       if (![fm fileExistsAtPath:seed isDirectory:&is_dir] || !is_dir)
          return;
@@ -416,26 +466,75 @@ static void frontend_darwin_install_seed(const char *application_data,
          return;
 
       RARCH_LOG("[Seed] No config yet, installing the bundled setup.\n");
-      it = [fm enumeratorAtPath:seed];
-      while ((rel = [it nextObject]))
-      {
-         NSString *from = [seed stringByAppendingPathComponent:rel];
-         NSString *to   = frontend_darwin_seed_target(rel, app_data, docs);
-         if (!to)
-            continue;
-         if ([fm fileExistsAtPath:from isDirectory:&is_dir] && is_dir)
+      win = frontend_darwin_seed_window(&status, &bar);
+
+      dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+         @autoreleasepool
          {
-            [fm createDirectoryAtPath:to withIntermediateDirectories:YES
-               attributes:nil error:nil];
-            continue;
+            NSFileManager *wfm = [NSFileManager new];
+            NSString *rel;
+            NSDirectoryEnumerator *it;
+            BOOL dir           = NO;
+            NSUInteger count   = 0;
+
+            it = [wfm enumeratorAtPath:seed];
+            while ((rel = [it nextObject]))
+               if (![[[it fileAttributes] fileType]
+                     isEqualToString:NSFileTypeDirectory])
+                  count++;
+            total = count;
+
+            it = [wfm enumeratorAtPath:seed];
+            while ((rel = [it nextObject]))
+            {
+               NSString *from = [seed stringByAppendingPathComponent:rel];
+               NSString *to   = frontend_darwin_seed_target(rel, app_data, docs);
+               if (!to)
+                  continue;
+               if ([wfm fileExistsAtPath:from isDirectory:&dir] && dir)
+               {
+                  [wfm createDirectoryAtPath:to withIntermediateDirectories:YES
+                     attributes:nil error:nil];
+                  continue;
+               }
+               copied++;
+               if ([wfm fileExistsAtPath:to])
+                  continue;
+               if ([wfm copyItemAtPath:from toPath:to error:nil])
+                  /* Cores copied out of a downloaded app would otherwise be
+                   * refused by Gatekeeper when they are loaded. */
+                  removexattr([to fileSystemRepresentation],
+                        "com.apple.quarantine", XATTR_NOFOLLOW);
+            }
          }
-         if ([fm fileExistsAtPath:to])
-            continue;
-         if ([fm copyItemAtPath:from toPath:to error:nil])
-            /* Cores copied out of a downloaded app would otherwise be
-             * refused by Gatekeeper when they are loaded. */
-            removexattr([to fileSystemRepresentation],
-                  "com.apple.quarantine", XATTR_NOFOLLOW);
+         done = YES;
+      });
+
+      /* Keep the window drawn and movable until the copy is done. Key
+       * events are held back so Cmd-Q cannot quit halfway through. */
+      while (!done)
+      {
+         @autoreleasepool
+         {
+            NSEvent *ev = [NSApp nextEventMatchingMask:NSEventMaskAny
+               untilDate:[NSDate dateWithTimeIntervalSinceNow:0.1]
+               inMode:NSDefaultRunLoopMode dequeue:YES];
+            if (ev && [ev type] != NSEventTypeKeyDown
+                   && [ev type] != NSEventTypeKeyUp)
+               [NSApp sendEvent:ev];
+            if (total)
+            {
+               if ([bar isIndeterminate])
+               {
+                  [bar setIndeterminate:NO];
+                  [bar setMaxValue:(double)total];
+               }
+               [bar setDoubleValue:(double)copied];
+               [status setStringValue:[NSString stringWithFormat:
+                  @"Copied %lu of %lu files", (unsigned long)copied,
+                  (unsigned long)total]];
+            }
+         }
       }
 
       list = [NSString stringWithContentsOfFile:
@@ -453,6 +552,10 @@ static void frontend_darwin_install_seed(const char *application_data,
                writeToFile:path atomically:YES
                encoding:NSUTF8StringEncoding error:nil];
       }
+
+      [win orderOut:nil];
+      /* Shows the "finishing setup" and "ready" messages once RetroArch is up */
+      retroarch_first_run_setup_installed();
       RARCH_LOG("[Seed] Done.\n");
    }
 }
