@@ -910,7 +910,7 @@ int main(int argc, char **argv)
             }
             CHECK(!sawLoad && !sawCancel && sawCustom, "no Load / Cancel, a Load Custom Core... button");
             CHECK([ctrl respondsToSelector:NSSelectorFromString(@"loadCustomCore:")], "loadCustomCore: implemented");
-            CHECK(st && [[st stringValue] hasPrefix:[NSString stringWithUTF8String:PACKAGE_VERSION " - "]], "status shows '<version> - <core>' (%s)", [[st stringValue] UTF8String]);
+            CHECK(st && [[st stringValue] hasPrefix:[NSString stringWithUTF8String:PACKAGE_DISPLAY_VERSION " - "]], "status shows '<version> - <core>' (%s)", [[st stringValue] UTF8String]);
          }
          CHECK(fabs((f.origin.x + f.size.width / 2) - (wf.origin.x + wf.size.width / 2)) <= 8
                || f.origin.x <= vis.origin.x + 16 || f.origin.x + f.size.width >= vis.origin.x + vis.size.width - 16,
