@@ -3302,7 +3302,7 @@ static const char *cc_thumb_subdir(int t)
 {
    char buf[NAME_MAX_LENGTH + 32];
    const char *core = wimp ? companion_core_current_core_name(wimp->core) : NULL;
-   snprintf(buf, sizeof(buf), "%s - %s", PACKAGE_VERSION,
+   snprintf(buf, sizeof(buf), "%s - %s", PACKAGE_DISPLAY_VERSION,
          (core && *core) ? core : msg_hash_to_str(MENU_ENUM_LABEL_VALUE_NO_CORE));
    [self setStatus:buf];
 }
@@ -3529,7 +3529,7 @@ static const char *cc_thumb_subdir(int t)
    NSAlert *a = [[[NSAlert alloc] init] autorelease_compat];
    [a setMessageText:@"RetroArch"];
    [a setInformativeText:[NSString stringWithFormat:@"%s %s\n%s",
-      msg_hash_to_str(MENU_ENUM_LABEL_VALUE_QT_MENU_HELP_ABOUT), PACKAGE_VERSION,
+      msg_hash_to_str(MENU_ENUM_LABEL_VALUE_QT_MENU_HELP_ABOUT), PACKAGE_DISPLAY_VERSION,
       "www.libretro.com"]];
    [a runModal];
 }
@@ -4191,7 +4191,7 @@ static const char *cc_thumb_subdir(int t)
    {
       char buf[NAME_MAX_LENGTH + 32];
       const char *core = companion_core_current_core_name(wimp->core);
-      snprintf(buf, sizeof(buf), "%s - %s", PACKAGE_VERSION,
+      snprintf(buf, sizeof(buf), "%s - %s", PACKAGE_DISPLAY_VERSION,
             (core && *core) ? core : msg_hash_to_str(MENU_ENUM_LABEL_VALUE_NO_CORE));
       [coresStatus setStringValue:BOXSTRING(buf)];
    }

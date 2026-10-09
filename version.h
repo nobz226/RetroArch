@@ -19,4 +19,10 @@
 
 #include "version.all"
 
+/* Name shown to the user in place of the version number. PACKAGE_VERSION
+ * itself stays numeric: netplay, cheevos and the updater depend on it. */
+#ifndef PACKAGE_DISPLAY_VERSION
+#define PACKAGE_DISPLAY_VERSION "RetroArch - MacOS-ARM-Nobz Edition"
+#endif
+
 #endif

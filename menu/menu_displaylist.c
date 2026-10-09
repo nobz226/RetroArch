@@ -2707,7 +2707,7 @@ static unsigned menu_displaylist_parse_system_info(file_list_t *list)
          msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SYSTEM_INFO_RETROARCH_VERSION),
          sizeof(entry));
    _len       += strlcpy_lit(entry + _len, ": ", sizeof(entry) - _len);
-   strlcpy(entry + _len, PACKAGE_VERSION, sizeof(entry) - _len);
+   strlcpy(entry + _len, PACKAGE_DISPLAY_VERSION, sizeof(entry) - _len);
    if (menu_entries_append(list, entry, "",
          MENU_ENUM_LABEL_SYSTEM_INFO_ENTRY, MENU_SETTINGS_CORE_INFO_NONE,
          0, 0, NULL))
