@@ -2025,6 +2025,18 @@ static void xmb_set_running_content_thumbnail(xmb_handle_t *xmb)
 
    gfx_thumbnail_set_content_playlist(menu_st->thumbnail_path_data, history, 0);
    xmb_update_thumbnail_image(xmb);
+
+   /* The right and left thumbnails reload through the pending requests
+    * set above. The icon thumbnail is not reloaded in the Quick Menu (its
+    * entries carry no icon paths), so load it here from the same data. */
+   if (gfx_thumbnail_is_enabled(menu_st->thumbnail_path_data, GFX_THUMBNAIL_ICON))
+   {
+      settings_t *settings = config_get_ptr();
+      gfx_thumbnail_request(menu_st->thumbnail_path_data, GFX_THUMBNAIL_ICON,
+            history, 0, &xmb->thumbnails.icon,
+            settings->uints.gfx_thumbnail_upscale_threshold,
+            settings->bools.network_on_demand_thumbnails);
+   }
 }
 
 static unsigned xmb_get_system_tab(xmb_handle_t *xmb, unsigned i)
