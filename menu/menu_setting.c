@@ -1033,6 +1033,113 @@ int setting_bool_action_left_with_refresh(
    return 0;
 }
 
+/* Kiosk mode: switching it on or off always takes the password. With no
+ * password yet, switching it on first asks for a new one, twice, so a typo
+ * cannot lock the menu. */
+static rarch_setting_t *kiosk_mode_setting;
+static char kiosk_mode_new_password[NAME_MAX_LENGTH];
+
+static void kiosk_mode_notify(const char *msg, bool ok)
+{
+   runloop_msg_queue_push(msg, strlen(msg), 1, 100, true, NULL,
+         MESSAGE_QUEUE_ICON_DEFAULT,
+         ok ? MESSAGE_QUEUE_CATEGORY_SUCCESS : MESSAGE_QUEUE_CATEGORY_ERROR);
+}
+
+static void kiosk_mode_set(bool enable)
+{
+   struct menu_state *menu_st = menu_state_get_ptr();
+   rarch_setting_t *setting   = kiosk_mode_setting;
+
+   config_get_ptr()->bools.kiosk_mode_enable = enable;
+   if (setting && setting->actions->change)
+      setting->actions->change(setting);
+   menu_st->flags |=  MENU_ST_FLAG_PREVENT_POPULATE
+                   |  MENU_ST_FLAG_ENTRIES_NEED_REFRESH;
+   kiosk_mode_notify(enable ? "Kiosk mode enabled." : "Kiosk mode disabled.", true);
+}
+
+static bool kiosk_mode_dialog(const char *label, input_keyboard_line_complete_t cb)
+{
+   menu_input_ctx_line_t line;
+   line.label         = label;
+   line.label_setting = kiosk_mode_setting ? kiosk_mode_setting->name : "";
+   line.type          = 0;
+   line.idx           = 0;
+   line.text_type     = MENU_INPUT_DIALOG_KB_TYPE_PASSWORD;
+   line.cb            = cb;
+   return menu_input_dialog_start(&line);
+}
+
+static void kiosk_mode_cb_check(void *userdata, const char *str)
+{
+   if (str && *str)
+   {
+      settings_t *settings = config_get_ptr();
+      if (string_is_equal(menu_input_dialog_get_buffer(),
+               settings->paths.kiosk_mode_password))
+         kiosk_mode_set(!settings->bools.kiosk_mode_enable);
+      else
+         kiosk_mode_notify(msg_hash_to_str(MSG_INPUT_KIOSK_MODE_PASSWORD_NOK), false);
+   }
+   menu_input_dialog_end();
+}
+
+static void kiosk_mode_cb_confirm(void *userdata, const char *str)
+{
+   if (str && *str)
+   {
+      if (string_is_equal(menu_input_dialog_get_buffer(), kiosk_mode_new_password))
+      {
+         strlcpy(config_get_ptr()->paths.kiosk_mode_password,
+               kiosk_mode_new_password,
+               sizeof(config_get_ptr()->paths.kiosk_mode_password));
+         kiosk_mode_set(true);
+      }
+      else
+         kiosk_mode_notify("The passwords don't match. Kiosk mode was not enabled.", false);
+   }
+   kiosk_mode_new_password[0] = '\0';
+   menu_input_dialog_end();
+}
+
+static void kiosk_mode_cb_new(void *userdata, const char *str)
+{
+   if (str && *str)
+   {
+      strlcpy(kiosk_mode_new_password, menu_input_dialog_get_buffer(),
+            sizeof(kiosk_mode_new_password));
+      menu_input_dialog_end();
+      if (*kiosk_mode_new_password)
+         kiosk_mode_dialog("Enter the kiosk mode password again", kiosk_mode_cb_confirm);
+      return;
+   }
+   menu_input_dialog_end();
+}
+
+static int setting_kiosk_mode_action_toggle(
+      rarch_setting_t *setting, size_t idx, bool wraparound)
+{
+   settings_t *settings = config_get_ptr();
+
+   kiosk_mode_setting = setting;
+
+   if (!*settings->paths.kiosk_mode_password)
+   {
+      /* Switching off without a password can only follow a config that
+       * was edited by hand; there is nothing to ask for. */
+      if (settings->bools.kiosk_mode_enable)
+         kiosk_mode_set(false);
+      else
+         kiosk_mode_dialog("Set a password for kiosk mode", kiosk_mode_cb_new);
+      return 0;
+   }
+
+   kiosk_mode_dialog(msg_hash_to_str(MSG_INPUT_KIOSK_MODE_PASSWORD),
+         kiosk_mode_cb_check);
+   return 0;
+}
+
 int setting_uint_action_left_with_refresh(
       rarch_setting_t *setting, size_t idx, bool wraparound)
 {

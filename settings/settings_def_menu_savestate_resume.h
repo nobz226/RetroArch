@@ -18,7 +18,7 @@ S_BOOL(menu_show_advanced_settings, SHOW_ADVANCED_SETTINGS,
 #ifndef SETTINGS_DEF_CONFIG_PASS
 S_BOOL_EX(kiosk_mode_enable, MENU_ENABLE_KIOSK_MODE,
       "menu_enable_kiosk_mode",
-      DEFAULT_KIOSK_MODE_ENABLE, SD_FLAG_NONE, 0, 0, setting_bool_action_left_with_refresh, NULL, NULL, NULL, setting_bool_action_left_with_refresh, setting_bool_action_right_with_refresh, 0,
+      DEFAULT_KIOSK_MODE_ENABLE, SD_FLAG_NONE, 0, 0, setting_kiosk_mode_action_toggle, NULL, NULL, NULL, setting_kiosk_mode_action_toggle, setting_kiosk_mode_action_toggle, 0,
       "Kiosk Mode",
-      "Protects the setup by hiding all configuration related settings.")
+      "Protects the setup by hiding all configuration related settings. Switching it on or off takes a password; the first time, you set one.")
 #endif
