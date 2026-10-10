@@ -422,6 +422,10 @@ static NSString *frontend_darwin_seed_target(NSString *rel,
 @property (nonatomic, strong) NSSecureTextField *kioskPass;
 @property (nonatomic, strong) NSSecureTextField *kioskPass2;
 @property (nonatomic, strong) NSMutableArray *pages;
+@property (nonatomic, strong) NSString *raToken;
+@property (nonatomic, strong) NSString *raVerifiedUser;
+@property (nonatomic, strong) NSString *raVerifiedFor;
+@property (nonatomic) BOOL raChecking;
 @property (nonatomic) NSInteger page;
 @property (nonatomic) BOOL copyDone;
 @property (nonatomic) BOOL finished;
@@ -476,7 +480,8 @@ static NSTextField *ra_seed_label(NSString *text, CGFloat size, BOOL bold, NSRec
    [self.avatarView setImage:[[NSImage alloc] initWithContentsOfFile:placeholder]];
    [self.avatarView setWantsLayer:YES];
    [[self.avatarView layer] setBackgroundColor:[[NSColor colorWithWhite:0.2 alpha:1.0] CGColor]];
-   [[self.avatarView layer] setCornerRadius:12];
+   [[self.avatarView layer] setCornerRadius:60];
+   [[self.avatarView layer] setMasksToBounds:YES];
    [p addSubview:self.avatarView];
    choose = [NSButton buttonWithTitle:@"Choose Picture..." target:self action:@selector(choosePicture:)];
    [choose setFrame:NSMakeRect(362, 44, 140, 30)];
@@ -486,7 +491,7 @@ static NSTextField *ra_seed_label(NSString *text, CGFloat size, BOOL bold, NSRec
    /* Page 2: RetroAchievements */
    p = [self newPage];
    [p addSubview:ra_seed_label(@"RetroAchievements", 16, YES, NSMakeRect(24, 236, 492, 24))];
-   [p addSubview:ra_seed_label(@"Achievements are switched on. Log in to earn them while you play.", 12, NO, NSMakeRect(24, 208, 492, 20))];
+   [p addSubview:ra_seed_label(@"Achievements are switched on. Log in to earn them while you play; the account is checked with RetroAchievements and only a login token is kept.", 12, NO, NSMakeRect(24, 208, 492, 20))];
    self.raLogin  = [NSButton radioButtonWithTitle:@"Log in with my account" target:self action:@selector(raMode:)];
    self.raCreate = [NSButton radioButtonWithTitle:@"Create a new account" target:self action:@selector(raMode:)];
    self.raSkip   = [NSButton radioButtonWithTitle:@"Not now" target:self action:@selector(raMode:)];
@@ -565,6 +570,7 @@ static NSTextField *ra_seed_label(NSString *text, CGFloat size, BOOL bold, NSRec
          [v removeFromSuperview];
    }
    [self.error setStringValue:@""];
+   [self.error setTextColor:[NSColor systemRedColor]];
    [self.backButton setHidden:self.page == 0];
    [self updateFinish];
 }
@@ -572,6 +578,13 @@ static NSTextField *ra_seed_label(NSString *text, CGFloat size, BOOL bold, NSRec
 - (void)updateFinish
 {
    BOOL last = self.page == (NSInteger)[self.pages count] - 1;
+   [self.backButton setEnabled:!self.raChecking];
+   if (self.raChecking)
+   {
+      [self.nextButton setEnabled:NO];
+      [self.skipButton setEnabled:NO];
+      return;
+   }
    if (!last)
    {
       [self.nextButton setTitle:@"Next"];
@@ -696,7 +709,93 @@ static BOOL ra_seed_value_ok(NSString *s)
    [self showPage];
 }
 
-- (void)next:(id)sender { if ([self checkPage]) [self advance]; }
+/* Checks the RetroAchievements account with the login request RetroArch
+ * itself makes (rcheevos "login2"), and keeps the returned token: the
+ * password is never written to disk. */
+- (BOOL)raNeedsCheck
+{
+   NSString *key;
+   if (self.page != 1 || [self.raSkip state] == NSControlStateValueOn)
+      return NO;
+   if (![[self.raUser stringValue] length])
+      return NO;
+   key = [NSString stringWithFormat:@"%@\n%@", [self.raUser stringValue], [self.raPass stringValue]];
+   return ![key isEqualToString:self.raVerifiedFor];
+}
+
+static NSString *ra_seed_form_escape(NSString *s)
+{
+   NSMutableCharacterSet *ok = [[NSCharacterSet alphanumericCharacterSet] mutableCopy];
+   [ok addCharactersInString:@"-._~"];
+   return [s stringByAddingPercentEncodingWithAllowedCharacters:ok];
+}
+
+- (void)raCheck
+{
+   NSString *user = [self.raUser stringValue];
+   NSString *pass = [self.raPass stringValue];
+   NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:
+      [NSURL URLWithString:@"https://retroachievements.org/dorequest.php"]];
+   NSURLSessionDataTask *task;
+
+   self.raChecking = YES;
+   [self.error setTextColor:[NSColor secondaryLabelColor]];
+   [self.error setStringValue:@"Checking your RetroAchievements account..."];
+   [self updateFinish];
+
+   [req setHTTPMethod:@"POST"];
+   [req setTimeoutInterval:20];
+   [req setValue:@"RetroArch/1.22.2 (macOS) rcheevos" forHTTPHeaderField:@"User-Agent"];
+   [req setValue:@"application/x-www-form-urlencoded" forHTTPHeaderField:@"Content-Type"];
+   [req setHTTPBody:[[NSString stringWithFormat:@"r=login2&u=%@&p=%@",
+      ra_seed_form_escape(user), ra_seed_form_escape(pass)]
+      dataUsingEncoding:NSUTF8StringEncoding]];
+
+   task = [[NSURLSession sharedSession] dataTaskWithRequest:req
+      completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err)
+   {
+      NSDictionary *json = nil;
+      if (data)
+      {
+         id obj = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+         if ([obj isKindOfClass:[NSDictionary class]])
+            json = obj;
+      }
+      dispatch_async(dispatch_get_main_queue(), ^{
+         self.raChecking = NO;
+         [self.error setTextColor:[NSColor systemRedColor]];
+         if ([[json objectForKey:@"Success"] boolValue]
+               && [[json objectForKey:@"Token"] isKindOfClass:[NSString class]])
+         {
+            id name = [json objectForKey:@"User"];
+            self.raToken        = [json objectForKey:@"Token"];
+            self.raVerifiedUser = [name isKindOfClass:[NSString class]] ? name : user;
+            self.raVerifiedFor  = [NSString stringWithFormat:@"%@\n%@", user, pass];
+            [self.error setStringValue:@""];
+            [self advance];
+            return;
+         }
+         if (json && [[json objectForKey:@"Error"] isKindOfClass:[NSString class]])
+            [self.error setStringValue:[json objectForKey:@"Error"]];
+         else
+            [self.error setStringValue:@"Couldn't reach RetroAchievements. Check the internet connection, or choose \"Not now\"."];
+         [self updateFinish];
+      });
+   }];
+   [task resume];
+}
+
+- (void)next:(id)sender
+{
+   if (self.raChecking || ![self checkPage])
+      return;
+   if ([self raNeedsCheck])
+   {
+      [self raCheck];
+      return;
+   }
+   [self advance];
+}
 - (void)skip:(id)sender { [self clearPage]; [self advance]; }
 - (void)back:(id)sender { if (self.page > 0) { self.page--; [self showPage]; } }
 
@@ -795,16 +894,18 @@ static void ra_seed_apply(RASeedSetup *setup, NSString *app_data)
    if (cfg)
    {
       cfg = ra_seed_cfg_set(cfg, @"cheevos_enable", @"true");
+      cfg = ra_seed_cfg_set(cfg, @"video_font_enable", @"true");
       if ([name length])
          cfg = ra_seed_cfg_set(cfg, @"netplay_nickname", name);
       [cfg writeToFile:cfg_path atomically:YES encoding:NSUTF8StringEncoding error:nil];
    }
 
+   /* Only an account RetroAchievements accepted, and only its token */
    if ([setup.raSkip state] != NSControlStateValueOn
-         && [[setup.raUser stringValue] length] && [[setup.raPass stringValue] length])
+         && setup.raToken && setup.raVerifiedUser)
    {
-      keys = ra_seed_cfg_set(keys, @"cheevos_username", [setup.raUser stringValue]);
-      keys = ra_seed_cfg_set(keys, @"cheevos_password", [setup.raPass stringValue]);
+      keys = ra_seed_cfg_set(keys, @"cheevos_username", setup.raVerifiedUser);
+      keys = ra_seed_cfg_set(keys, @"cheevos_token", setup.raToken);
       keys_changed = YES;
    }
    if ([[setup.kioskPass stringValue] length])

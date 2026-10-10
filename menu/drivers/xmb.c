@@ -7811,9 +7811,58 @@ static void xmb_sync_wideglyph(xmb_handle_t *xmb)
    xmb_compute_wideglyph(xmb);
 }
 
+/* Loads a profile picture with everything outside the largest centred
+ * circle made transparent, with a one-pixel soft edge. Alpha is the top
+ * byte in both 8-bit layouts image_texture_load produces. */
+static bool xmb_load_round_image(const char *path, uintptr_t *texture)
+{
+   struct texture_image ti;
+   unsigned x, y;
+   float cx, cy, r;
+
+   ti.width         = 0;
+   ti.height        = 0;
+   ti.pixels        = NULL;
+   ti.supports_rgba = gfx_surface_wants_rgba();
+   ti.pix10         = false;
+
+   if (!path_is_valid(path) || !image_texture_load(&ti, path))
+      return false;
+
+   cx = (ti.width  - 1) * 0.5f;
+   cy = (ti.height - 1) * 0.5f;
+   r  = MIN(ti.width, ti.height) * 0.5f;
+
+   for (y = 0; y < ti.height; y++)
+   {
+      for (x = 0; x < ti.width; x++)
+      {
+         uint32_t *px = &ti.pixels[y * ti.width + x];
+         float dx     = x - cx;
+         float dy     = y - cy;
+         float cover  = r - sqrtf(dx * dx + dy * dy) + 0.5f;
+         if (cover < 1.0f)
+         {
+            uint32_t a = (*px >> 24) & 0xFF;
+            a          = (cover <= 0.0f) ? 0 : (uint32_t)(a * cover);
+            *px        = (*px & 0x00FFFFFF) | (a << 24);
+         }
+      }
+   }
+
+   if (!video_driver_texture_load(&ti, TEXTURE_FILTER_MIPMAP_LINEAR, texture))
+   {
+      image_texture_free(&ti);
+      return false;
+   }
+   image_texture_free(&ti);
+   return true;
+}
+
 static void xmb_load_avatar(xmb_handle_t *xmb)
 {
    char user_dir[PATH_MAX_LENGTH];
+   char path[PATH_MAX_LENGTH];
    settings_t *settings = config_get_ptr();
 
    video_driver_texture_unload(&xmb->avatar_texture);
@@ -7823,10 +7872,13 @@ static void xmb_load_avatar(xmb_handle_t *xmb)
       return;
    fill_pathname_join_special(user_dir, settings->paths.directory_assets,
          "user", sizeof(user_dir));
-   if (!gfx_display_reset_textures_list("avatar.png", user_dir,
-            &xmb->avatar_texture, gfx_display_texture_filter(), NULL))
-      gfx_display_reset_textures_list("avatar-placeholder.png", user_dir,
-            &xmb->avatar_texture, gfx_display_texture_filter(), NULL);
+   fill_pathname_join_special(path, user_dir, "avatar.png", sizeof(path));
+   if (!xmb_load_round_image(path, &xmb->avatar_texture))
+   {
+      fill_pathname_join_special(path, user_dir, "avatar-placeholder.png",
+            sizeof(path));
+      xmb_load_round_image(path, &xmb->avatar_texture);
+   }
 }
 
 static void xmb_context_reset_textures(
@@ -10166,6 +10218,9 @@ static void xmb_frame(void *data, video_frame_info_t *video_info)
       float scale_factor  = xmb->scale_cap;
       float icon_size     = xmb->icon_size * 0.90f;
       float margin_offset = -(icon_size / 2) - (7 * xmb->last_scale_factor);
+      /* 80% of the status icon size, centred where that icon would be */
+      float avatar_size   = icon_size * 0.80f;
+      float inset         = (icon_size - avatar_size) / 2;
 
       gfx_display_blend_begin(dispctx, userdata);
       xmb_draw_icon(
@@ -10174,11 +10229,11 @@ static void xmb_frame(void *data, video_frame_info_t *video_info)
             dispctx,
             VIDEO_SCALE_PACK(video_width, video_height),
             shadows_enable,
-            icon_size,
-            icon_size,
+            avatar_size,
+            avatar_size,
             xmb->avatar_texture,
-            video_width - xmb->margins_title_left + margin_offset,
-            icon_size + xmb->margins_title_top + margin_offset,
+            video_width - xmb->margins_title_left + margin_offset + inset,
+            icon_size + xmb->margins_title_top + margin_offset - inset,
             video_width,
             video_height,
             xmb->alpha,
@@ -10189,7 +10244,7 @@ static void xmb_frame(void *data, video_frame_info_t *video_info)
             &mymat);
       gfx_display_blend_end(dispctx, userdata);
 
-      avatar_space = icon_size * scale_factor * 1.25f;
+      avatar_space = (avatar_size + icon_size * 0.35f) * scale_factor;
       title_header_max_width = avatar_space;
    }
 
