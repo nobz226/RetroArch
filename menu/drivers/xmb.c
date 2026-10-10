@@ -51,6 +51,8 @@
 
 #include "../../configuration.h"
 #include "../../content.h"
+#include "../../defaults.h"
+#include "../../paths.h"
 #include "../../core_info.h"
 #include "../../file_path_special.h"
 #include "../../input/input_osk.h"
@@ -1993,6 +1995,36 @@ static void xmb_update_thumbnail_image(void *data)
             sizeof(xmb->fullscreen_thumbnail_label),
             xmb->is_quick_menu ? true : false,
             xmb->title_name);
+}
+
+/* The Quick Menu of running content shows that content's thumbnails,
+ * but nothing sets them: it inherits whatever the shared thumbnail path
+ * data last held. Opened from the playlist that is the launched entry;
+ * after browsing other tabs it is the first entry of the last playlist
+ * passed. The newest content history entry is the running content, with
+ * the label and database name its thumbnails are found by. */
+static void xmb_set_running_content_thumbnail(xmb_handle_t *xmb)
+{
+   struct menu_state *menu_st         = menu_state_get_ptr();
+   playlist_t *history                = g_defaults.content_history;
+   const char *content_path           = path_get(RARCH_PATH_CONTENT);
+   const struct playlist_entry *entry = NULL;
+
+   if (     !history
+         || !menu_st->thumbnail_path_data
+         || !content_path || !*content_path
+         || playlist_size(history) < 1)
+      return;
+
+   playlist_get_index(history, 0, &entry);
+   if (     !entry
+         || !entry->path
+         || !string_is_equal(entry->path, content_path)
+         || string_is_equal(menu_st->thumbnail_path_data->content_path, content_path))
+      return;
+
+   gfx_thumbnail_set_content_playlist(menu_st->thumbnail_path_data, history, 0);
+   xmb_update_thumbnail_image(xmb);
 }
 
 static unsigned xmb_get_system_tab(xmb_handle_t *xmb, unsigned i)
@@ -4217,6 +4249,9 @@ static void xmb_populate_entries(void *data,
    xmb->fullscreen_thumbnails_available =
             (xmb->is_playlist || xmb->is_db_manager_list || xmb->is_file_list)
          && !(xmb_system_tab > XMB_SYSTEM_TAB_SETTINGS && xmb->depth > 2);
+
+   if (xmb->is_quick_menu && menu_is_running_quick_menu())
+      xmb_set_running_content_thumbnail(xmb);
 
    if (     (xmb->is_quick_menu || xmb->is_state_slot)
          && *xmb->savestate_thumbnail_file_path)
