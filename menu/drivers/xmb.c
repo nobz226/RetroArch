@@ -436,6 +436,9 @@ typedef struct xmb_handle
    } textures;
 
    uintptr_t current_menu_icon;
+   /* Profile picture in the top-right corner: <assets>/user/avatar.png,
+    * or avatar-placeholder.png next to it when there is none. */
+   uintptr_t avatar_texture;
 
    size_t categories_selection_ptr;
    size_t categories_selection_ptr_old;
@@ -7808,12 +7811,32 @@ static void xmb_sync_wideglyph(xmb_handle_t *xmb)
    xmb_compute_wideglyph(xmb);
 }
 
+static void xmb_load_avatar(xmb_handle_t *xmb)
+{
+   char user_dir[PATH_MAX_LENGTH];
+   settings_t *settings = config_get_ptr();
+
+   video_driver_texture_unload(&xmb->avatar_texture);
+   xmb->avatar_texture = 0;
+
+   if (!*settings->paths.directory_assets)
+      return;
+   fill_pathname_join_special(user_dir, settings->paths.directory_assets,
+         "user", sizeof(user_dir));
+   if (!gfx_display_reset_textures_list("avatar.png", user_dir,
+            &xmb->avatar_texture, gfx_display_texture_filter(), NULL))
+      gfx_display_reset_textures_list("avatar-placeholder.png", user_dir,
+            &xmb->avatar_texture, gfx_display_texture_filter(), NULL);
+}
+
 static void xmb_context_reset_textures(
       xmb_handle_t *xmb,
       const char *iconpath,
       unsigned menu_xmb_theme)
 {
    unsigned i;
+
+   xmb_load_avatar(xmb);
 
    /* Invalidate in-flight context texture loads */
    xmb_ctx_icon_load_gen++;
@@ -9292,6 +9315,7 @@ static void xmb_frame(void *data, video_frame_info_t *video_info)
    size_t selection                    = 0;
    size_t percent_width                = 0;
    size_t title_header_max_width       = 0;
+   float avatar_space                  = 0.0f;
    float left_thumbnail_margin_width   = 0.0f;
    float right_thumbnail_margin_width  = 0.0f;
    float thumbnail_margin_height_under = 0.0f;
@@ -10136,6 +10160,39 @@ static void xmb_frame(void *data, video_frame_info_t *video_info)
    /* Battery */
    gfx_display_set_alpha(xmb_item_color, MIN(xmb->alpha, 1.00f));
 
+   /* Profile picture in the corner; battery and clock move left of it */
+   if (xmb->avatar_texture && !xmb->assets_missing)
+   {
+      float scale_factor  = xmb->scale_cap;
+      float icon_size     = xmb->icon_size * 0.90f;
+      float margin_offset = -(icon_size / 2) - (7 * xmb->last_scale_factor);
+
+      gfx_display_blend_begin(dispctx, userdata);
+      xmb_draw_icon(
+            userdata,
+            p_disp,
+            dispctx,
+            VIDEO_SCALE_PACK(video_width, video_height),
+            shadows_enable,
+            icon_size,
+            icon_size,
+            xmb->avatar_texture,
+            video_width - xmb->margins_title_left + margin_offset,
+            icon_size + xmb->margins_title_top + margin_offset,
+            video_width,
+            video_height,
+            xmb->alpha,
+            0,
+            scale_factor,
+            &xmb_item_color[0],
+            xmb->shadow_offset,
+            &mymat);
+      gfx_display_blend_end(dispctx, userdata);
+
+      avatar_space = icon_size * scale_factor * 1.25f;
+      title_header_max_width = avatar_space;
+   }
+
    if (battery_level_enable)
    {
       gfx_display_ctx_powerstate_t powerstate;
@@ -10171,7 +10228,7 @@ static void xmb_frame(void *data, video_frame_info_t *video_info)
                   (powerstate.percent > 20) ? XMB_TEXTURE_BATTERY_40   :
                   XMB_TEXTURE_BATTERY_20
                   ],
-                  video_width - xmb->margins_title_left + margin_offset,
+                  video_width - xmb->margins_title_left + margin_offset - avatar_space,
                   icon_size + xmb->margins_title_top + margin_offset,
                   video_width,
                   video_height,
@@ -10188,10 +10245,10 @@ static void xmb_frame(void *data, video_frame_info_t *video_info)
             font_driver_get_message_width(
                   xmb->font, msg, strlen(msg), 1.0f);
 
-         title_header_max_width = x_pos;
+         title_header_max_width = x_pos + avatar_space;
 
          xmb_draw_text(shadows_enable, xmb, video_info, msg,
-               video_width - xmb->margins_title_left - x_pos,
+               video_width - xmb->margins_title_left - x_pos - avatar_space,
                xmb->margins_title_top, 1, 1, TEXT_ALIGN_RIGHT,
                video_width, video_height, xmb->font);
       }
@@ -10203,7 +10260,7 @@ static void xmb_frame(void *data, video_frame_info_t *video_info)
       gfx_display_ctx_datetime_t datetime;
       char timedate[256];
       size_t _len        = 0;
-      size_t x_pos       = 0;
+      size_t x_pos       = (size_t)avatar_space;
       float scale_factor = xmb->scale_cap;
       float icon_size    = (!xmb->assets_missing) ? xmb->icon_size * 0.90f : 0;
 
@@ -10982,6 +11039,8 @@ static void xmb_context_destroy(void *data)
 
    for (i = 0; i < XMB_TEXTURE_LAST; i++)
       video_driver_texture_unload(&xmb->textures.list[i]);
+   video_driver_texture_unload(&xmb->avatar_texture);
+   xmb->avatar_texture = 0;
 
    xmb_unload_thumbnail_textures(xmb);
    xmb_unload_icon_thumbnail_textures(xmb);

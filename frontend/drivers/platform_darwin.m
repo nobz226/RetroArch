@@ -45,6 +45,7 @@
 
 #if TARGET_OS_OSX
 #import <AppKit/AppKit.h>
+#include <sys/stat.h>
 #include <Carbon/Carbon.h>
 #include <IOKit/ps/IOPowerSources.h>
 #include <IOKit/ps/IOPSKeys.h>
@@ -395,49 +396,433 @@ static NSString *frontend_darwin_seed_target(NSString *rel,
  * setup is never touched, and it never replaces a file that is already
  * there. Files listed in seed/home-paths.txt get "@HOME@" replaced with the
  * user's home folder, for settings that cannot use "~". */
-/* The copy runs on a worker while the main thread shows this window, so the
- * user sees what is happening: RetroArch's own window has nothing to draw yet
- * and the copy takes about a minute. */
-static NSPanel *frontend_darwin_seed_window(NSTextField **status,
-      NSProgressIndicator **bar)
+/* First-run setup window. The copy runs on a worker while this window asks
+ * for a profile (name and picture), a RetroAchievements account and a kiosk
+ * mode password, so the minute it takes is not spent waiting. The answers
+ * are written into the copied config before RetroArch reads it. */
+@interface RASeedSetup : NSObject
+@property (nonatomic, strong) NSPanel *win;
+@property (nonatomic, strong) NSView *pageView;
+@property (nonatomic, strong) NSTextField *status;
+@property (nonatomic, strong) NSTextField *error;
+@property (nonatomic, strong) NSProgressIndicator *bar;
+@property (nonatomic, strong) NSButton *backButton;
+@property (nonatomic, strong) NSButton *skipButton;
+@property (nonatomic, strong) NSButton *nextButton;
+@property (nonatomic, strong) NSTextField *userName;
+@property (nonatomic, strong) NSImageView *avatarView;
+@property (nonatomic, strong) NSString *avatarPath;
+@property (nonatomic, strong) NSString *placeholderPath;
+@property (nonatomic, strong) NSButton *raLogin;
+@property (nonatomic, strong) NSButton *raCreate;
+@property (nonatomic, strong) NSButton *raSkip;
+@property (nonatomic, strong) NSTextField *raUser;
+@property (nonatomic, strong) NSSecureTextField *raPass;
+@property (nonatomic, strong) NSButton *raSignup;
+@property (nonatomic, strong) NSSecureTextField *kioskPass;
+@property (nonatomic, strong) NSSecureTextField *kioskPass2;
+@property (nonatomic, strong) NSMutableArray *pages;
+@property (nonatomic) NSInteger page;
+@property (nonatomic) BOOL copyDone;
+@property (nonatomic) BOOL finished;
+@end
+
+@implementation RASeedSetup
+
+static NSTextField *ra_seed_label(NSString *text, CGFloat size, BOOL bold, NSRect frame)
 {
-   NSPanel *win        = [[NSPanel alloc]
-      initWithContentRect:NSMakeRect(0, 0, 480, 160)
+   NSTextField *l = [NSTextField wrappingLabelWithString:text];
+   [l setFont:bold ? [NSFont boldSystemFontOfSize:size] : [NSFont systemFontOfSize:size]];
+   [l setFrame:frame];
+   return l;
+}
+
+- (NSView *)newPage
+{
+   NSView *v = [[NSView alloc] initWithFrame:[self.pageView bounds]];
+   [self.pages addObject:v];
+   return v;
+}
+
+- (void)buildWithPlaceholder:(NSString *)placeholder
+{
+   NSView *view, *p;
+   NSButton *choose;
+
+   self.pages           = [NSMutableArray array];
+   self.placeholderPath = placeholder;
+   self.win = [[NSPanel alloc]
+      initWithContentRect:NSMakeRect(0, 0, 540, 400)
       styleMask:NSWindowStyleMaskTitled
       backing:NSBackingStoreBuffered defer:NO];
-   NSView *view        = [win contentView];
-   NSTextField *head   = [NSTextField labelWithString:
-      @"Setting up RetroArch for the first time"];
-   NSTextField *body   = [NSTextField wrappingLabelWithString:
-      @"Copying the cores, settings, artwork and saves. This takes about "
-      @"a minute. Please wait and don't close RetroArch."];
+   [self.win setTitle:@"RetroArch - MacOS-ARM-Nobz Edition"];
+   [self.win setLevel:NSFloatingWindowLevel];
+   [self.win setReleasedWhenClosed:NO];
+   view = [self.win contentView];
 
-   [win setTitle:@"RetroArch - MacOS-ARM-Nobz Edition"];
-   [win setLevel:NSFloatingWindowLevel];
-   [win setReleasedWhenClosed:NO];
+   self.pageView = [[NSView alloc] initWithFrame:NSMakeRect(0, 120, 540, 280)];
+   [view addSubview:self.pageView];
 
-   [head setFont:[NSFont boldSystemFontOfSize:14]];
-   [head setFrame:NSMakeRect(20, 118, 440, 20)];
-   [body setFrame:NSMakeRect(20, 70, 440, 40)];
+   /* Page 1: profile */
+   p = [self newPage];
+   [p addSubview:ra_seed_label(@"Welcome! Let's set up RetroArch", 16, YES, NSMakeRect(24, 236, 492, 24))];
+   [p addSubview:ra_seed_label(@"While the games' settings and artwork copy in the background, create your profile. Your picture appears in the top-right corner of the menu.", 12, NO, NSMakeRect(24, 192, 492, 36))];
+   [p addSubview:ra_seed_label(@"Your name", 12, YES, NSMakeRect(24, 150, 200, 18))];
+   self.userName = [[NSTextField alloc] initWithFrame:NSMakeRect(24, 122, 260, 24)];
+   [self.userName setPlaceholderString:@"Player"];
+   [p addSubview:self.userName];
+   self.avatarView = [[NSImageView alloc] initWithFrame:NSMakeRect(372, 82, 120, 120)];
+   [self.avatarView setImageScaling:NSImageScaleProportionallyUpOrDown];
+   [self.avatarView setImage:[[NSImage alloc] initWithContentsOfFile:placeholder]];
+   [self.avatarView setWantsLayer:YES];
+   [[self.avatarView layer] setBackgroundColor:[[NSColor colorWithWhite:0.2 alpha:1.0] CGColor]];
+   [[self.avatarView layer] setCornerRadius:12];
+   [p addSubview:self.avatarView];
+   choose = [NSButton buttonWithTitle:@"Choose Picture..." target:self action:@selector(choosePicture:)];
+   [choose setFrame:NSMakeRect(362, 44, 140, 30)];
+   [p addSubview:choose];
+   [p addSubview:ra_seed_label(@"No picture? A placeholder is used; you can add one later as assets/user/avatar.png.", 11, NO, NSMakeRect(24, 40, 320, 32))];
 
-   *bar = [[NSProgressIndicator alloc]
-      initWithFrame:NSMakeRect(20, 44, 440, 20)];
-   [*bar setIndeterminate:YES];
-   [*bar setUsesThreadedAnimation:YES];
-   [*bar startAnimation:nil];
+   /* Page 2: RetroAchievements */
+   p = [self newPage];
+   [p addSubview:ra_seed_label(@"RetroAchievements", 16, YES, NSMakeRect(24, 236, 492, 24))];
+   [p addSubview:ra_seed_label(@"Achievements are switched on. Log in to earn them while you play.", 12, NO, NSMakeRect(24, 208, 492, 20))];
+   self.raLogin  = [NSButton radioButtonWithTitle:@"Log in with my account" target:self action:@selector(raMode:)];
+   self.raCreate = [NSButton radioButtonWithTitle:@"Create a new account" target:self action:@selector(raMode:)];
+   self.raSkip   = [NSButton radioButtonWithTitle:@"Not now" target:self action:@selector(raMode:)];
+   [self.raLogin setFrame:NSMakeRect(24, 176, 220, 20)];
+   [self.raCreate setFrame:NSMakeRect(24, 152, 220, 20)];
+   [self.raSkip setFrame:NSMakeRect(24, 128, 220, 20)];
+   [self.raLogin setState:NSControlStateValueOn];
+   [p addSubview:self.raLogin];
+   [p addSubview:self.raCreate];
+   [p addSubview:self.raSkip];
+   self.raSignup = [NSButton buttonWithTitle:@"Open the Sign-Up Page" target:self action:@selector(openSignup:)];
+   [self.raSignup setFrame:NSMakeRect(250, 146, 200, 30)];
+   [self.raSignup setHidden:YES];
+   [p addSubview:self.raSignup];
+   [p addSubview:ra_seed_label(@"Username", 12, YES, NSMakeRect(24, 96, 120, 18))];
+   self.raUser = [[NSTextField alloc] initWithFrame:NSMakeRect(24, 68, 220, 24)];
+   [p addSubview:self.raUser];
+   [p addSubview:ra_seed_label(@"Password", 12, YES, NSMakeRect(264, 96, 120, 18))];
+   self.raPass = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(264, 68, 220, 24)];
+   [p addSubview:self.raPass];
+   [p addSubview:ra_seed_label(@"New accounts are created on the RetroAchievements website. Sign up there, then enter the account here.", 11, NO, NSMakeRect(24, 24, 492, 32))];
 
-   *status = [NSTextField labelWithString:@"Getting ready..."];
-   [*status setFont:[NSFont systemFontOfSize:11]];
-   [*status setTextColor:[NSColor secondaryLabelColor]];
-   [*status setFrame:NSMakeRect(20, 16, 440, 18)];
+   /* Page 3: kiosk mode password */
+   p = [self newPage];
+   [p addSubview:ra_seed_label(@"Kiosk mode password", 16, YES, NSMakeRect(24, 236, 492, 24))];
+   [p addSubview:ra_seed_label(@"Kiosk mode hides all the settings so nobody can change the setup. Switching it on or off always takes this password. Kiosk mode stays off for now; turn it on in Settings > User Interface.", 12, NO, NSMakeRect(24, 176, 492, 52))];
+   [p addSubview:ra_seed_label(@"Password", 12, YES, NSMakeRect(24, 136, 160, 18))];
+   self.kioskPass = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(24, 108, 220, 24)];
+   [p addSubview:self.kioskPass];
+   [p addSubview:ra_seed_label(@"Password again", 12, YES, NSMakeRect(264, 136, 160, 18))];
+   self.kioskPass2 = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(264, 108, 220, 24)];
+   [p addSubview:self.kioskPass2];
+   [p addSubview:ra_seed_label(@"Skip it to set one later: switching kiosk mode on asks for a new password the first time.", 11, NO, NSMakeRect(24, 60, 492, 32))];
 
-   [view addSubview:head];
-   [view addSubview:body];
-   [view addSubview:*bar];
-   [view addSubview:*status];
-   [win center];
-   [win makeKeyAndOrderFront:nil];
-   return win;
+   /* Buttons, messages and the copy progress */
+   self.error = ra_seed_label(@"", 11, NO, NSMakeRect(24, 92, 492, 18));
+   [self.error setTextColor:[NSColor systemRedColor]];
+   [view addSubview:self.error];
+   self.backButton = [NSButton buttonWithTitle:@"Back" target:self action:@selector(back:)];
+   self.skipButton = [NSButton buttonWithTitle:@"Skip" target:self action:@selector(skip:)];
+   self.nextButton = [NSButton buttonWithTitle:@"Next" target:self action:@selector(next:)];
+   [self.backButton setFrame:NSMakeRect(20, 54, 90, 30)];
+   [self.skipButton setFrame:NSMakeRect(326, 54, 90, 30)];
+   [self.nextButton setFrame:NSMakeRect(424, 54, 100, 30)];
+   [self.nextButton setKeyEquivalent:@"\r"];
+   [view addSubview:self.backButton];
+   [view addSubview:self.skipButton];
+   [view addSubview:self.nextButton];
+
+   self.bar = [[NSProgressIndicator alloc] initWithFrame:NSMakeRect(24, 30, 492, 16)];
+   [self.bar setIndeterminate:YES];
+   [self.bar setUsesThreadedAnimation:YES];
+   [self.bar startAnimation:nil];
+   [view addSubview:self.bar];
+   self.status = ra_seed_label(@"Getting ready...", 11, NO, NSMakeRect(24, 8, 492, 16));
+   [self.status setTextColor:[NSColor secondaryLabelColor]];
+   [view addSubview:self.status];
+
+   self.page = 0;
+   [self showPage];
+   [self.win center];
+   [NSApp activateIgnoringOtherApps:YES];
+   [self.win makeKeyAndOrderFront:nil];
+   [self.win makeFirstResponder:self.userName];
+}
+
+- (void)showPage
+{
+   NSInteger i;
+   for (i = 0; i < (NSInteger)[self.pages count]; i++)
+   {
+      NSView *v = [self.pages objectAtIndex:i];
+      if (i == self.page && ![v superview])
+         [self.pageView addSubview:v];
+      else if (i != self.page && [v superview])
+         [v removeFromSuperview];
+   }
+   [self.error setStringValue:@""];
+   [self.backButton setHidden:self.page == 0];
+   [self updateFinish];
+}
+
+- (void)updateFinish
+{
+   BOOL last = self.page == (NSInteger)[self.pages count] - 1;
+   if (!last)
+   {
+      [self.nextButton setTitle:@"Next"];
+      [self.nextButton setEnabled:YES];
+      [self.skipButton setEnabled:YES];
+      return;
+   }
+   [self.nextButton setTitle:@"Finish"];
+   [self.nextButton setEnabled:self.copyDone];
+   [self.skipButton setEnabled:self.copyDone];
+}
+
+- (void)raMode:(id)sender
+{
+   BOOL skip = [self.raSkip state] == NSControlStateValueOn;
+   [self.raSignup setHidden:[self.raCreate state] != NSControlStateValueOn];
+   [self.raUser setEnabled:!skip];
+   [self.raPass setEnabled:!skip];
+}
+
+- (void)openSignup:(id)sender
+{
+   [[NSWorkspace sharedWorkspace] openURL:
+      [NSURL URLWithString:@"https://retroachievements.org/createaccount.php"]];
+}
+
+- (void)choosePicture:(id)sender
+{
+   NSOpenPanel *panel = [NSOpenPanel openPanel];
+   NSImage *img;
+   [panel setAllowedFileTypes:@[@"png", @"jpg", @"jpeg", @"heic", @"tiff", @"tif", @"gif", @"bmp", @"webp"]];
+   [panel setAllowsMultipleSelection:NO];
+   [panel setMessage:@"Choose a profile picture"];
+   [panel setLevel:NSModalPanelWindowLevel];
+   if ([panel runModal] != NSModalResponseOK)
+      return;
+   img = [[NSImage alloc] initWithContentsOfURL:[[panel URLs] firstObject]];
+   if (!img)
+   {
+      [self.error setStringValue:@"That file isn't a picture RetroArch can use."];
+      return;
+   }
+   self.avatarPath = [[[panel URLs] firstObject] path];
+   [self.avatarView setImage:img];
+   [self.error setStringValue:@""];
+}
+
+/* Config values are written in quotes, so a quote can't be part of them */
+static BOOL ra_seed_value_ok(NSString *s)
+{
+   return [s rangeOfString:@"\""].location == NSNotFound;
+}
+
+- (BOOL)checkPage
+{
+   if (self.page == 0 && !ra_seed_value_ok([self.userName stringValue]))
+   {
+      [self.error setStringValue:@"Your name can't contain a quotation mark (\")."];
+      return NO;
+   }
+   if (self.page == 1 && [self.raSkip state] != NSControlStateValueOn)
+   {
+      BOOL hasUser = [[self.raUser stringValue] length] > 0;
+      BOOL hasPass = [[self.raPass stringValue] length] > 0;
+      if (hasUser != hasPass)
+      {
+         [self.error setStringValue:@"Enter both the username and the password, or choose \"Not now\"."];
+         return NO;
+      }
+      if (!ra_seed_value_ok([self.raUser stringValue]) || !ra_seed_value_ok([self.raPass stringValue]))
+      {
+         [self.error setStringValue:@"The username and password can't contain a quotation mark (\")."];
+         return NO;
+      }
+   }
+   if (self.page == 2)
+   {
+      NSString *a = [self.kioskPass stringValue];
+      NSString *b = [self.kioskPass2 stringValue];
+      if (([a length] || [b length]) && ![a isEqualToString:b])
+      {
+         [self.error setStringValue:@"The two kiosk passwords don't match."];
+         return NO;
+      }
+      if (!ra_seed_value_ok(a))
+      {
+         [self.error setStringValue:@"The password can't contain a quotation mark (\")."];
+         return NO;
+      }
+   }
+   return YES;
+}
+
+- (void)clearPage
+{
+   if (self.page == 0)
+   {
+      [self.userName setStringValue:@""];
+      self.avatarPath = nil;
+      [self.avatarView setImage:[[NSImage alloc] initWithContentsOfFile:self.placeholderPath]];
+   }
+   else if (self.page == 1)
+   {
+      [self.raSkip setState:NSControlStateValueOn];
+      [self raMode:nil];
+   }
+   else if (self.page == 2)
+   {
+      [self.kioskPass setStringValue:@""];
+      [self.kioskPass2 setStringValue:@""];
+   }
+}
+
+- (void)advance
+{
+   if (self.page == (NSInteger)[self.pages count] - 1)
+   {
+      self.finished = YES;
+      return;
+   }
+   self.page++;
+   [self showPage];
+}
+
+- (void)next:(id)sender { if ([self checkPage]) [self advance]; }
+- (void)skip:(id)sender { [self clearPage]; [self advance]; }
+- (void)back:(id)sender { if (self.page > 0) { self.page--; [self showPage]; } }
+
+- (void)setProgress:(NSUInteger)copied of:(NSUInteger)total
+{
+   if (!total)
+      return;
+   if ([self.bar isIndeterminate])
+   {
+      [self.bar setIndeterminate:NO];
+      [self.bar setMaxValue:(double)total];
+   }
+   [self.bar setDoubleValue:(double)copied];
+   [self.status setStringValue:self.copyDone
+      ? @"Everything is copied. Finish when you're ready."
+      : [NSString stringWithFormat:@"Copying the setup: %lu of %lu files",
+         (unsigned long)copied, (unsigned long)total]];
+   [self updateFinish];
+}
+@end
+
+/* Sets "key = value" in a config file's text, replacing the line if the key is there */
+static NSString *ra_seed_cfg_set(NSString *text, NSString *key, NSString *value)
+{
+   NSString *line        = [NSString stringWithFormat:@"%@ = \"%@\"", key, value];
+   NSMutableArray *lines = [NSMutableArray arrayWithArray:
+      [text componentsSeparatedByString:@"\n"]];
+   NSUInteger i;
+   for (i = 0; i < [lines count]; i++)
+   {
+      NSString *l = [lines objectAtIndex:i];
+      if ([l hasPrefix:[key stringByAppendingString:@" "]]
+            || [l hasPrefix:[key stringByAppendingString:@"="]])
+      {
+         [lines replaceObjectAtIndex:i withObject:line];
+         return [lines componentsJoinedByString:@"\n"];
+      }
+   }
+   if ([lines count] && [[lines lastObject] length] == 0)
+      [lines insertObject:line atIndex:[lines count] - 1];
+   else
+      [lines addObject:line];
+   return [lines componentsJoinedByString:@"\n"];
+}
+
+/* Saves the picture as a 256x256 PNG, cropped to a square from the middle */
+static void ra_seed_save_avatar(NSString *from, NSString *to)
+{
+   NSImage *src = [[NSImage alloc] initWithContentsOfFile:from];
+   NSBitmapImageRep *rep;
+   NSSize sz;
+   CGFloat side;
+   NSData *png;
+
+   if (!src)
+      return;
+   sz   = [src size];
+   side = MIN(sz.width, sz.height);
+   if (side <= 0)
+      return;
+   rep = [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL
+      pixelsWide:256 pixelsHigh:256 bitsPerSample:8 samplesPerPixel:4
+      hasAlpha:YES isPlanar:NO colorSpaceName:NSDeviceRGBColorSpace
+      bytesPerRow:0 bitsPerPixel:0];
+   [NSGraphicsContext saveGraphicsState];
+   [NSGraphicsContext setCurrentContext:
+      [NSGraphicsContext graphicsContextWithBitmapImageRep:rep]];
+   [[NSGraphicsContext currentContext] setImageInterpolation:NSImageInterpolationHigh];
+   [src drawInRect:NSMakeRect(0, 0, 256, 256)
+      fromRect:NSMakeRect((sz.width - side) / 2, (sz.height - side) / 2, side, side)
+      operation:NSCompositingOperationCopy fraction:1.0];
+   [NSGraphicsContext restoreGraphicsState];
+   png = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+   [[NSFileManager defaultManager] createDirectoryAtPath:
+      [to stringByDeletingLastPathComponent] withIntermediateDirectories:YES
+      attributes:nil error:nil];
+   [png writeToFile:to atomically:YES];
+}
+
+/* Writes the setup window's answers into the freshly copied config */
+static void ra_seed_apply(RASeedSetup *setup, NSString *app_data)
+{
+   NSString *cfg_path = [app_data stringByAppendingPathComponent:@"config/retroarch.cfg"];
+   NSString *key_path = [app_data stringByAppendingPathComponent:@"config/retroarch-keychain.cfg"];
+   NSString *cfg      = [NSString stringWithContentsOfFile:cfg_path
+      encoding:NSUTF8StringEncoding error:nil];
+   NSString *keys     = [NSString stringWithContentsOfFile:key_path
+      encoding:NSUTF8StringEncoding error:nil];
+   NSString *name     = [[setup.userName stringValue]
+      stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+   BOOL keys_changed  = NO;
+
+   if (!keys)
+      keys = @"";
+
+   if (cfg)
+   {
+      cfg = ra_seed_cfg_set(cfg, @"cheevos_enable", @"true");
+      if ([name length])
+         cfg = ra_seed_cfg_set(cfg, @"netplay_nickname", name);
+      [cfg writeToFile:cfg_path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+   }
+
+   if ([setup.raSkip state] != NSControlStateValueOn
+         && [[setup.raUser stringValue] length] && [[setup.raPass stringValue] length])
+   {
+      keys = ra_seed_cfg_set(keys, @"cheevos_username", [setup.raUser stringValue]);
+      keys = ra_seed_cfg_set(keys, @"cheevos_password", [setup.raPass stringValue]);
+      keys_changed = YES;
+   }
+   if ([[setup.kioskPass stringValue] length])
+   {
+      keys = ra_seed_cfg_set(keys, @"kiosk_mode_password", [setup.kioskPass stringValue]);
+      keys_changed = YES;
+   }
+   if (keys_changed)
+   {
+      if (![keys hasSuffix:@"\n"])
+         keys = [keys stringByAppendingString:@"\n"];
+      [keys writeToFile:key_path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+      chmod([key_path fileSystemRepresentation], 0600);
+   }
+
+   if (setup.avatarPath)
+      ra_seed_save_avatar(setup.avatarPath,
+            [app_data stringByAppendingPathComponent:@"assets/user/avatar.png"]);
 }
 
 static void frontend_darwin_install_seed(const char *application_data,
@@ -451,9 +836,7 @@ static void frontend_darwin_install_seed(const char *application_data,
       NSString *app_data = [NSString stringWithUTF8String:application_data];
       NSString *docs     = [NSString stringWithUTF8String:documents_dir];
       NSString *list;
-      NSTextField *status;
-      NSProgressIndicator *bar;
-      NSPanel *win;
+      RASeedSetup *setup;
       BOOL is_dir        = NO;
       __block volatile BOOL done        = NO;
       __block volatile NSUInteger total  = 0;
@@ -466,7 +849,9 @@ static void frontend_darwin_install_seed(const char *application_data,
          return;
 
       RARCH_LOG("[Seed] No config yet, installing the bundled setup.\n");
-      win = frontend_darwin_seed_window(&status, &bar);
+      setup = [RASeedSetup new];
+      [setup buildWithPlaceholder:[seed stringByAppendingPathComponent:
+         @"Application Support/RetroArch/assets/user/avatar-placeholder.png"]];
 
       dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
          @autoreleasepool
@@ -510,30 +895,34 @@ static void frontend_darwin_install_seed(const char *application_data,
          done = YES;
       });
 
-      /* Keep the window drawn and movable until the copy is done. Key
-       * events are held back so Cmd-Q cannot quit halfway through. */
-      while (!done)
+      /* Run the window until the copy is done and the user has finished.
+       * Cmd-Q is held back so RetroArch can't quit halfway through; the
+       * edit shortcuts are routed by hand, as there is no Edit menu yet. */
+      while (!(done && setup.finished))
       {
          @autoreleasepool
          {
             NSEvent *ev = [NSApp nextEventMatchingMask:NSEventMaskAny
                untilDate:[NSDate dateWithTimeIntervalSinceNow:0.1]
                inMode:NSDefaultRunLoopMode dequeue:YES];
-            if (ev && [ev type] != NSEventTypeKeyDown
-                   && [ev type] != NSEventTypeKeyUp)
-               [NSApp sendEvent:ev];
-            if (total)
+            if (ev && [ev type] == NSEventTypeKeyDown
+                   && ([ev modifierFlags] & NSEventModifierFlagCommand))
             {
-               if ([bar isIndeterminate])
-               {
-                  [bar setIndeterminate:NO];
-                  [bar setMaxValue:(double)total];
-               }
-               [bar setDoubleValue:(double)copied];
-               [status setStringValue:[NSString stringWithFormat:
-                  @"Copied %lu of %lu files", (unsigned long)copied,
-                  (unsigned long)total]];
+               NSString *k = [[ev charactersIgnoringModifiers] lowercaseString];
+               SEL action  = NULL;
+               if ([k isEqualToString:@"v"])      action = @selector(paste:);
+               else if ([k isEqualToString:@"c"]) action = @selector(copy:);
+               else if ([k isEqualToString:@"x"]) action = @selector(cut:);
+               else if ([k isEqualToString:@"a"]) action = @selector(selectAll:);
+               if (action)
+                  [NSApp sendAction:action to:nil from:nil];
+               ev = nil;
             }
+            if (ev)
+               [NSApp sendEvent:ev];
+            if (done && !setup.copyDone)
+               setup.copyDone = YES;
+            [setup setProgress:copied of:total];
          }
       }
 
@@ -553,7 +942,8 @@ static void frontend_darwin_install_seed(const char *application_data,
                encoding:NSUTF8StringEncoding error:nil];
       }
 
-      [win orderOut:nil];
+      ra_seed_apply(setup, app_data);
+      [setup.win orderOut:nil];
       /* Shows the "finishing setup" and "ready" messages once RetroArch is up */
       retroarch_first_run_setup_installed();
       RARCH_LOG("[Seed] Done.\n");
