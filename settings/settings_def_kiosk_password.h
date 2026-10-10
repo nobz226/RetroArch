@@ -11,5 +11,5 @@ S_STRING_P(kiosk_mode_password, MENU_KIOSK_MODE_PASSWORD,
       "menu_disable_kiosk_mode_password",
       "", SD_FLAG_ALLOW_INPUT, 0, NULL, NULL, setting_generic_action_start_default, NULL, NULL, NULL, ST_UI_TYPE_PASSWORD_LINE_EDIT,
       "Set Password for Disabling Kiosk Mode",
-      "Supplying a password when enabling kiosk mode makes it possible to later disable it from the menu, by going to the Main Menu, selecting Disable Kiosk Mode and entering the password.")
+      "Kiosk mode can be switched off from the Main Menu with Disable Kiosk Mode. With a password set here, Disable Kiosk Mode asks for it first.")
 #endif

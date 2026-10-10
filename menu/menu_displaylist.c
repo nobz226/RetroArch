@@ -5009,8 +5009,9 @@ static unsigned menu_displaylist_parse_information_list(file_list_t *info_list)
                false) == 0)
             count++;
 
-      if (      settings->bools.kiosk_mode_enable
-            && *settings->paths.kiosk_mode_password)
+      /* Always offered while kiosk mode is on: without a password it
+       * switches kiosk mode off directly, with one it asks for it. */
+      if (settings->bools.kiosk_mode_enable)
          if (MENU_DISPLAYLIST_PARSE_SETTINGS_ENUM(
                info_list,
                MENU_ENUM_LABEL_MENU_DISABLE_KIOSK_MODE,
@@ -16773,8 +16774,7 @@ static bool menu_displaylist_ctl_internal(
                            false) == 0)
                         count++;
 
-                  if (      settings->bools.kiosk_mode_enable
-                        && *settings->paths.kiosk_mode_password)
+                  if (settings->bools.kiosk_mode_enable)
                      if (MENU_DISPLAYLIST_PARSE_SETTINGS_ENUM(
                            info->list,
                            MENU_ENUM_LABEL_MENU_DISABLE_KIOSK_MODE,

@@ -3612,6 +3612,25 @@ static void menu_input_st_string_cb_rename_entry(void *userdata,
    menu_input_dialog_end();
 }
 
+static void menu_kiosk_mode_disable(const char *_msg)
+{
+   settings_t *settings       = config_get_ptr();
+   struct menu_state *menu_st = menu_state_get_ptr();
+
+   settings->bools.kiosk_mode_enable = false;
+
+   /* Refresh menu tabs list and current page */
+   menu_st->selection_ptr      = 0;
+   menu_st->flags             |= MENU_ST_FLAG_ENTRIES_NEED_REFRESH;
+
+   if (menu_st->driver_ctx->environ_cb)
+      menu_st->driver_ctx->environ_cb(MENU_ENVIRON_RESET_HORIZONTAL_LIST,
+            NULL, menu_st->userdata);
+
+   runloop_msg_queue_push(_msg, strlen(_msg), 1, 100, true, NULL,
+         MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_SUCCESS);
+}
+
 static void menu_input_st_string_cb_disable_kiosk_mode(void *userdata,
       const char *str)
 {
@@ -3622,25 +3641,7 @@ static void menu_input_st_string_cb_disable_kiosk_mode(void *userdata,
       const char *password = settings->paths.kiosk_mode_password;
 
       if (string_is_equal(label, password))
-      {
-         const char *_msg = msg_hash_to_str(MSG_INPUT_KIOSK_MODE_PASSWORD_OK);
-
-         settings->bools.kiosk_mode_enable = false;
-
-         /* Refresh menu tabs list and current page */
-         {
-            struct menu_state *menu_st  = menu_state_get_ptr();
-            menu_st->selection_ptr      = 0;
-            menu_st->flags             |= MENU_ST_FLAG_ENTRIES_NEED_REFRESH;
-
-            if (menu_st->driver_ctx->environ_cb)
-               menu_st->driver_ctx->environ_cb(MENU_ENVIRON_RESET_HORIZONTAL_LIST,
-                     NULL, menu_st->userdata);
-         }
-
-         runloop_msg_queue_push(_msg, strlen(_msg), 1, 100, true, NULL,
-               MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_SUCCESS);
-      }
+         menu_kiosk_mode_disable(msg_hash_to_str(MSG_INPUT_KIOSK_MODE_PASSWORD_OK));
       else
       {
          const char *_msg = msg_hash_to_str(MSG_INPUT_KIOSK_MODE_PASSWORD_NOK);
@@ -4028,11 +4029,24 @@ DEFAULT_ACTION_DIALOG_START(action_ok_cheat_file_save_as,
    (unsigned)idx,
    menu_input_st_string_cb_cheat_file_save_as)
 #endif
-DEFAULT_ACTION_DIALOG_START_TYPE(action_ok_disable_kiosk_mode,
+DEFAULT_ACTION_DIALOG_START_TYPE(action_ok_disable_kiosk_mode_password,
    msg_hash_to_str(MSG_INPUT_KIOSK_MODE_PASSWORD),
    (unsigned)entry_idx,
    menu_input_st_string_cb_disable_kiosk_mode,
    MENU_INPUT_DIALOG_KB_TYPE_PASSWORD)
+
+/* Without a kiosk password there is nothing to ask for: switch kiosk
+ * mode off directly. With one, ask for it first. */
+static int action_ok_disable_kiosk_mode(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   if (!*config_get_ptr()->paths.kiosk_mode_password)
+   {
+      menu_kiosk_mode_disable("Kiosk mode disabled.");
+      return 0;
+   }
+   return action_ok_disable_kiosk_mode_password(path, label, type, idx, entry_idx);
+}
 static int action_ok_rename_entry(const char *path,
       const char *label_setting, unsigned type, size_t idx, size_t entry_idx)
 {
