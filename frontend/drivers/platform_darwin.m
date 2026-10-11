@@ -998,7 +998,11 @@ static BOOL frontend_darwin_install_seed(const char *application_data,
 
       RARCH_LOG("[Seed] No config yet, installing the bundled setup.\n");
       /* Permissions first, so the copy into Documents never stops to ask */
-      ra_permissions_run_once();
+      @try { ra_permissions_run_once(); }
+      @catch (NSException *e)
+      {
+         RARCH_ERR("[Seed] Permissions page failed: %s\n", [[e reason] UTF8String]);
+      }
       setup = [RASeedSetup new];
       [setup buildWithPlaceholder:[seed stringByAppendingPathComponent:
          @"Application Support/RetroArch/assets/user/avatar-placeholder.png"]];
@@ -1162,9 +1166,21 @@ static void frontend_darwin_get_env(int *argc, char *argv[],
       BOOL seeded = frontend_darwin_install_seed(application_data, documents_dir_buf);
       @autoreleasepool
       {
-         /* Permissions, profiles and "Who's playing?", before the config is read */
-         ra_users_startup([NSString stringWithUTF8String:documents_dir_buf],
-               [NSString stringWithUTF8String:application_data], seeded);
+         /* Permissions, profiles and "Who's playing?", before the config is
+          * read. A failure here must never stop RetroArch from starting:
+          * it is logged and RetroArch carries on with the shared config. */
+         @try
+         {
+            ra_users_startup([NSString stringWithUTF8String:documents_dir_buf],
+                  [NSString stringWithUTF8String:application_data], seeded);
+         }
+         @catch (NSException *e)
+         {
+            RARCH_ERR("[Users] Startup failed: %s\n", [[e reason] UTF8String]);
+            for (NSWindow *w in [NSApp windows])
+               if ([w isKindOfClass:[NSPanel class]] && [w isVisible])
+                  [w orderOut:nil];
+         }
       }
    }
 #endif

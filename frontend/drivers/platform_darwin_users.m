@@ -468,8 +468,12 @@ static NSArray *ra_permission_rows(void)
 
 - (NSTextField *)statusLabel:(NSString *)key
 {
-   return (NSTextField *)[[self.win contentView] viewWithTag:
-      (NSInteger)[[ra_permission_rows() valueForKey:@"firstObject"] indexOfObject:key] + 100];
+   NSArray *rows = ra_permission_rows();
+   NSUInteger i;
+   for (i = 0; i < [rows count]; i++)
+      if ([[[rows objectAtIndex:i] objectAtIndex:0] isEqualToString:key])
+         return (NSTextField *)[[self.win contentView] viewWithTag:(NSInteger)i + 100];
+   return nil;
 }
 
 - (void)setState:(NSString *)state for:(NSString *)key
