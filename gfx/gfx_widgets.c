@@ -2503,10 +2503,11 @@ bool gfx_widgets_init(
             "xmb",
             sizeof(p_dispwidget->xmb_path)
             );
-      /* Base path */
+      /* Base path: the fonts ship with the Nobz icon theme, since this
+       * build has no Ozone menu (and no assets/ozone folder) */
       fill_pathname_join_special(p_dispwidget->ozone_path,
-            dir_assets,
-            "ozone",
+            p_dispwidget->xmb_path,
+            "nobz",
             sizeof(p_dispwidget->ozone_path));
       fill_pathname_join_special(p_dispwidget->ozone_regular_font_path,
             p_dispwidget->ozone_path, "regular.ttf",
