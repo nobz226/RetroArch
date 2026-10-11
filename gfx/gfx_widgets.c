@@ -2514,10 +2514,12 @@ bool gfx_widgets_init(
       fill_pathname_join_special(p_dispwidget->ozone_bold_font_path,
             p_dispwidget->ozone_path, "bold.ttf",
             sizeof(p_dispwidget->ozone_bold_font_path));
+      /* Notification icons come from the Nobz icon theme, the one this
+       * build ships, so they match the menu. */
       fill_pathname_join_special(
             theme_path,
             p_dispwidget->xmb_path,
-            "monochrome",
+            "nobz",
             sizeof(theme_path)
             );
       fill_pathname_join_special(
