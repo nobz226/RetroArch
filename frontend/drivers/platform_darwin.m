@@ -1163,7 +1163,19 @@ static void frontend_darwin_get_env(int *argc, char *argv[],
 #if TARGET_OS_OSX
    if (!portable)
    {
-      BOOL seeded = frontend_darwin_install_seed(application_data, documents_dir_buf);
+      BOOL seeded = NO;
+      @try
+      {
+         seeded = frontend_darwin_install_seed(application_data, documents_dir_buf);
+      }
+      @catch (NSException *e)
+      {
+         RARCH_ERR("[Seed] Setup failed: %s: %s\n",
+               [[e name] UTF8String], [[e reason] UTF8String]);
+         for (NSWindow *w in [NSApp windows])
+            if ([w isKindOfClass:[NSPanel class]] && [w isVisible])
+               [w orderOut:nil];
+      }
       @autoreleasepool
       {
          /* Permissions, profiles and "Who's playing?", before the config is
