@@ -70,6 +70,12 @@
 	<string>Local Netplay requires local network</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Some cores can use location.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Real Wii Remotes connect to Dolphin over Bluetooth.</string>
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>Games, saves and BIOS files can live on an external drive.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>Saves, playlists and settings are kept in Documents/RetroArch.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Some cores are able to provide microphone input to games.</string>
 	<key>NSPrincipalClass</key>

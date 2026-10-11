@@ -950,6 +950,9 @@ static bool config_save_credentials(
  * Kept unconditional so a build without a feature still moves
  * that feature's secrets out of retroarch.cfg instead of
  * carrying them over as unknown entries. */
+/* Active user's profile folder, see config_set_user_profile_dir(). */
+static char config_user_profile_dir[PATH_MAX_LENGTH];
+
 static const char *config_sensitive_keys[] = {
    "cheevos_username",
    "cheevos_password",
@@ -968,6 +971,7 @@ static const char *config_sensitive_keys[] = {
    "netplay_password",
    "netplay_spectate_password",
    "kiosk_mode_password",
+   "ai_service_ztranslate_key",
    "content_show_settings_password"
 };
 #endif
@@ -1731,6 +1735,7 @@ static struct config_array_setting *populate_settings_array(
    SETTING_ARRAY_SENSITIVE("kick_stream_key",             settings->arrays.kick_stream_key, true, NULL, true);
    SETTING_ARRAY("discord_app_id",                        settings->arrays.discord_app_id, true, DEFAULT_DISCORD_APP_ID, true);
    SETTING_ARRAY("ai_service_url",                        settings->arrays.ai_service_url, true, DEFAULT_AI_SERVICE_URL, true);
+   SETTING_ARRAY_SENSITIVE("ai_service_ztranslate_key",   settings->arrays.ai_service_ztranslate_key, false, NULL, true);
 #endif
 
 #ifdef HAVE_SMBCLIENT
@@ -6504,6 +6509,23 @@ static bool config_load_file(global_t *global,
       }
    }
 
+   /* The active user's settings and RetroAchievements login, merged
+    * over the shared config and keychain (see config_set_user_profile_dir). */
+   if (*config_user_profile_dir)
+   {
+      char user_cfg[PATH_MAX_LENGTH];
+      fill_pathname_join_special(user_cfg, config_user_profile_dir,
+            "user.cfg", sizeof(user_cfg));
+      if (path_is_valid(user_cfg))
+         config_append_file(conf, user_cfg);
+      fill_pathname_join_special(user_cfg, config_user_profile_dir,
+            "keychain.cfg", sizeof(user_cfg));
+      if (path_is_valid(user_cfg))
+         config_append_file(conf, user_cfg);
+      if (!first_load)
+         RARCH_LOG("[Config] User profile: \"%s\".\n", config_user_profile_dir);
+   }
+
    if (!path_is_empty(RARCH_PATH_CONFIG_APPEND))
    {
       char tmp_append_path[PATH_MAX_LENGTH];
@@ -8551,6 +8573,80 @@ static size_t config_get_credentials_path(char *s, size_t len)
          "retroarch-keychain.cfg", len);
 }
 
+/* User profiles. A frontend that lets people pick who is playing (the
+ * macOS one does, before the config is read) points this at that user's
+ * folder. user.cfg there holds the settings each user keeps for
+ * themselves, keychain.cfg their RetroAchievements login; both are
+ * merged over retroarch.cfg and retroarch-keychain.cfg at load and
+ * written back whenever the main config is saved. */
+
+static const char *const config_user_profile_keys[] = {
+   "savefile_directory",
+   "savestate_directory",
+   "cheevos_enable",
+   "cheevos_hardcore_mode_enable",
+   "video_font_enable",
+   "audio_volume",
+   "audio_mixer_volume",
+};
+
+void config_set_user_profile_dir(const char *dir)
+{
+   strlcpy(config_user_profile_dir, dir ? dir : "",
+         sizeof(config_user_profile_dir));
+}
+
+const char *config_get_user_profile_dir(void)
+{
+   return config_user_profile_dir;
+}
+
+static void config_save_user_profile(const char *main_path)
+{
+   unsigned i;
+   char user_path[PATH_MAX_LENGTH];
+   settings_t *settings  = config_st;
+   config_file_t *main   = config_file_new_from_path_to_string(main_path);
+   config_file_t *conf;
+
+   if (!main)
+      return;
+
+   fill_pathname_join_special(user_path, config_user_profile_dir,
+         "user.cfg", sizeof(user_path));
+   if (!(conf = config_file_new_from_path_to_string(user_path)))
+      conf = config_file_new_alloc();
+   if (conf)
+   {
+      for (i = 0; i < ARRAY_SIZE(config_user_profile_keys); i++)
+      {
+         const struct config_entry_list *entry =
+            config_get_entry(main, config_user_profile_keys[i]);
+         if (entry && entry->value)
+            config_set_string(conf, config_user_profile_keys[i], entry->value);
+      }
+      config_file_write(conf, user_path, true);
+      config_file_free(conf);
+   }
+   config_file_free(main);
+
+   /* The login always goes to the user's own keychain, empty values
+    * included, so it can never fall back to another user's. */
+   fill_pathname_join_special(user_path, config_user_profile_dir,
+         "keychain.cfg", sizeof(user_path));
+   if (!(conf = config_file_new_from_path_to_string(user_path)))
+      conf = config_file_new_alloc();
+   if (conf)
+   {
+      config_set_string(conf, "cheevos_username", settings->arrays.cheevos_username);
+      config_set_string(conf, "cheevos_password", "");
+      config_set_string(conf, "cheevos_token",    settings->arrays.cheevos_token);
+      if (config_file_write(conf, user_path, true))
+         path_set_private(user_path);
+      config_file_free(conf);
+   }
+}
+
 /**
  * config_save_credentials:
  * @main_conf           : loaded retroarch.cfg, source for secrets the
@@ -9308,6 +9404,10 @@ bool config_save_file(const char *path)
 
    ret = config_file_write(conf, path, true);
    config_file_free(conf);
+
+   if (ret && *config_user_profile_dir
+         && string_is_equal(path, path_get(RARCH_PATH_CONFIG)))
+      config_save_user_profile(path);
 
 #if TARGET_OS_TV
    if (ret && string_is_equal(path, path_get(RARCH_PATH_CONFIG)))

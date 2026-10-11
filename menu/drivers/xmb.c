@@ -697,6 +697,12 @@ const char* xmb_theme_ident(void)
 {
    unsigned menu_xmb_theme = config_get_ptr()->uints.menu_xmb_theme;
 
+   /* This build ships one icon theme, Nobz (assets/xmb/nobz); a config
+    * still naming another theme gets it too. */
+   (void)menu_xmb_theme;
+   return "nobz";
+#if 0
+
    switch (menu_xmb_theme)
    {
       case XMB_ICON_THEME_FLATUI:
@@ -726,6 +732,7 @@ const char* xmb_theme_ident(void)
          break;
    }
    return "monochrome";
+#endif
 }
 
 /* NOTE: This exists because calloc()ing xmb_node_t is expensive
