@@ -195,8 +195,11 @@ static void ra_user_link_dolphin(NSString *docs, NSString *dir)
          continue;
       if ([fm attributesOfItemAtPath:target error:nil])
          continue; /* already there: a link, or the user's own copy */
+      /* Relative (users/<name>/saves/dolphin-emu/User -> shared), so the
+       * link still works when the folder is copied to another Mac */
       [fm createSymbolicLinkAtPath:target
-         withDestinationPath:[shared stringByAppendingPathComponent:item] error:nil];
+         withDestinationPath:[@"../../../../../shared/dolphin-emu/User"
+            stringByAppendingPathComponent:item] error:nil];
    }
 }
 
