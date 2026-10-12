@@ -9452,6 +9452,10 @@ unsigned menu_displaylist_build_list(
             unsigned max_users = settings->uints.input_max_users;
 
 #ifdef HAVE_CONFIGFILE
+            if (MENU_DISPLAYLIST_PARSE_SETTINGS_ENUM(list,
+                     MENU_ENUM_LABEL_INPUT_REMAP_LAYOUT,
+                     PARSE_ONLY_UINT, false) == 0)
+               count++;
             if (menu_entries_append(list,
                   msg_hash_to_str(MENU_ENUM_LABEL_VALUE_REMAP_FILE_MANAGER_LIST),
                   MENU_ENUM_LABEL_REMAP_FILE_MANAGER_LIST_STR,
@@ -9598,6 +9602,7 @@ unsigned menu_displaylist_build_list(
                {MENU_ENUM_LABEL_INPUT_BIND_HOLD,                       PARSE_ONLY_UINT,  true},
                {MENU_ENUM_LABEL_INPUT_AUTODETECT_ENABLE,               PARSE_ONLY_BOOL,  true},
                {MENU_ENUM_LABEL_INPUT_REMAP_BINDS_ENABLE,              PARSE_ONLY_BOOL,  true},
+               {MENU_ENUM_LABEL_INPUT_REMAP_LAYOUT,                    PARSE_ONLY_UINT,  true},
                {MENU_ENUM_LABEL_INPUT_REMAP_SORT_BY_CONTROLLER_ENABLE, PARSE_ONLY_BOOL,  true},
                {MENU_ENUM_LABEL_INPUT_ICADE_ENABLE,                    PARSE_ONLY_BOOL,  true},
                {MENU_ENUM_LABEL_INPUT_SMALL_KEYBOARD_ENABLE,           PARSE_ONLY_BOOL,  true},

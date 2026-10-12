@@ -3006,6 +3006,41 @@ static int setting_action_ok_ai_translate_now(
 }
 #endif
 
+/* Face Button Layout: two values, so OK, left and right all switch
+ * between them; the running game picks up the new set's remaps. */
+static int setting_action_toggle_remap_layout(
+      rarch_setting_t *setting, size_t idx, bool wraparound)
+{
+   settings_t *settings = config_get_ptr();
+   if (!setting)
+      return -1;
+   *setting->value.target.unsigned_integer =
+         (*setting->value.target.unsigned_integer == INPUT_REMAP_LAYOUT_XBOX)
+         ? INPUT_REMAP_LAYOUT_NINTENDO : INPUT_REMAP_LAYOUT_XBOX;
+#ifdef HAVE_CONFIGFILE
+   config_apply_remap_layout(settings);
+   if (     settings->bools.auto_remaps_enable
+         && (runloop_state_get_ptr()->flags & RUNLOOP_FLAG_CORE_RUNNING))
+   {
+      input_remapping_deinit(false);
+      input_remapping_set_defaults(false);
+      config_load_remap(settings->paths.directory_input_remapping,
+            &runloop_state_get_ptr()->system);
+   }
+#endif
+   return 0;
+}
+
+static size_t setting_get_string_representation_remap_layout(
+      rarch_setting_t *setting, char *s, size_t len)
+{
+   if (!setting)
+      return 0;
+   return strlcpy(s,
+         (*setting->value.target.unsigned_integer == INPUT_REMAP_LAYOUT_XBOX)
+         ? "Xbox (A at the bottom)" : "Nintendo (A on the right)", len);
+}
+
 static int setting_action_ok_uint(
       rarch_setting_t *setting, size_t idx, bool wraparound)
 {

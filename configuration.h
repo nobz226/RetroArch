@@ -218,6 +218,7 @@ typedef struct settings
       unsigned input_rumble_gain;
       unsigned input_auto_game_focus;
       unsigned input_max_users;
+      unsigned input_remap_layout;
 
       unsigned netplay_port;
       unsigned netplay_max_connections;
@@ -1521,6 +1522,13 @@ bool config_save_file(const char *path);
  * or "" for none. Set before the config is loaded. */
 void config_set_user_profile_dir(const char *dir);
 const char *config_get_user_profile_dir(void);
+
+/* Face button layout: which remap set (remaps/Nintendo or remaps/Xbox)
+ * games use. Points the remap directory at the chosen set when the
+ * remap directory holds both; any other remap directory is left alone. */
+#define INPUT_REMAP_LAYOUT_NINTENDO 0
+#define INPUT_REMAP_LAYOUT_XBOX     1
+void config_apply_remap_layout(settings_t *settings);
 
 /**
  * config_save_overrides:

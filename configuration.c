@@ -7313,6 +7313,8 @@ static bool config_load_file(global_t *global,
       }
    }
 
+   config_apply_remap_layout(settings);
+
    if (conf)
       config_file_free(conf);
    if (bool_settings)
@@ -8588,7 +8590,35 @@ static const char *const config_user_profile_keys[] = {
    "video_font_enable",
    "audio_volume",
    "audio_mixer_volume",
+   "input_remap_layout",
 };
+
+void config_apply_remap_layout(settings_t *settings)
+{
+   size_t _len;
+   char base[DIR_MAX_LENGTH];
+   char set_dir[DIR_MAX_LENGTH];
+   const char *name;
+   char *dir = settings->paths.directory_input_remapping;
+
+   if (!*dir)
+      return;
+   _len = strlcpy(base, dir, sizeof(base));
+   while (_len > 1 && (base[_len - 1] == '/' || base[_len - 1] == '\\'))
+      base[--_len] = '\0';
+   name = path_basename_nocompression(base);
+   /* Already pointing at a set: switch from its parent */
+   if (string_is_equal(name, "Nintendo") || string_is_equal(name, "Xbox"))
+      path_basedir(base);
+   fill_pathname_join_special(set_dir, base,
+         settings->uints.input_remap_layout == INPUT_REMAP_LAYOUT_XBOX
+         ? "Xbox" : "Nintendo", sizeof(set_dir));
+   if (path_is_directory(set_dir) && !string_is_equal(set_dir, dir))
+   {
+      strlcpy(dir, set_dir, sizeof(settings->paths.directory_input_remapping));
+      RARCH_LOG("[Remap] Face button layout: \"%s\".\n", set_dir);
+   }
+}
 
 void config_set_user_profile_dir(const char *dir)
 {
