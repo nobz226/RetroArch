@@ -84,6 +84,11 @@ S_BOOL(input_remap_sort_by_controller_enable, INPUT_REMAP_SORT_BY_CONTROLLER_ENA
       false, SD_FLAG_ADVANCED, 0, 0,
       "Sort Remaps By Gamepad",
       "Remaps will only apply to the active gamepad in which they were saved.")
+S_UINT_EX(input_remap_layout, INPUT_REMAP_LAYOUT,
+      "input_remap_layout",
+      INPUT_REMAP_LAYOUT_NINTENDO, SD_FLAG_NONE, SDESC_RANGE_MINMAX, 0, 0, 1, 1, 0, setting_action_toggle_remap_layout, setting_get_string_representation_remap_layout, NULL, NULL, setting_action_toggle_remap_layout, setting_action_toggle_remap_layout, ST_UI_TYPE_UINT_COMBOBOX,
+      "Face Button Layout",
+      "The remap set games use. Nintendo: A on the right, B at the bottom (Switch Pro Controller, Joy-Con). Xbox: A at the bottom, B on the right (Xbox, PlayStation and most other controllers).")
 S_BOOL(input_autodetect_enable, INPUT_AUTODETECT_ENABLE,
       "input_autodetect_enable",
       DEFAULT_INPUT_AUTODETECT_ENABLE, SD_FLAG_ADVANCED, 0, 0,

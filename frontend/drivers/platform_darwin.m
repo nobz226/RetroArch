@@ -422,6 +422,8 @@ static NSString *frontend_darwin_seed_target(NSString *rel,
 @property (nonatomic, strong) NSSecureTextField *kioskPass;
 @property (nonatomic, strong) NSSecureTextField *kioskPass2;
 @property (nonatomic, strong) NSTextField *ztKey;
+@property (nonatomic, strong) NSButton *padNintendo;
+@property (nonatomic, strong) NSButton *padXbox;
 @property (nonatomic, strong) NSMutableArray *pages;
 @property (nonatomic, strong) NSString *raToken;
 @property (nonatomic, strong) NSString *raVerifiedUser;
@@ -542,6 +544,42 @@ static NSTextField *ra_seed_label(NSString *text, CGFloat size, BOOL bold, NSRec
    [p addSubview:self.ztKey];
    [p addSubview:ra_seed_label(@"The key is kept in the keychain file with your other logins, not in the settings. Skip it to add one later.", 11, NO, NSMakeRect(24, 40, 492, 32))];
 
+   /* Page 5: controller (face button layout = which remap set) */
+   p = [self newPage];
+   [p addSubview:ra_seed_label(@"Your controller", 16, YES, NSMakeRect(24, 236, 492, 24))];
+   [p addSubview:ra_seed_label(@"Controllers put A, B, X and Y in different places. Pick the kind you play with, so the button printed on it does what the game expects. You can change it later in Quick Menu > Controls.", 12, NO, NSMakeRect(24, 180, 492, 48))];
+   self.padNintendo = [NSButton radioButtonWithTitle:@"Nintendo layout" target:self action:@selector(padMode:)];
+   self.padXbox     = [NSButton radioButtonWithTitle:@"Xbox layout" target:self action:@selector(padMode:)];
+   [self.padNintendo setFrame:NSMakeRect(24, 150, 300, 20)];
+   [self.padXbox setFrame:NSMakeRect(24, 82, 300, 20)];
+   [p addSubview:self.padNintendo];
+   [p addSubview:self.padXbox];
+   [p addSubview:ra_seed_label(@"A on the right, B at the bottom. Switch Pro Controller, Joy-Con, and 8BitDo controllers in Switch mode.", 11, NO, NSMakeRect(44, 112, 360, 34))];
+   [p addSubview:ra_seed_label(@"A at the bottom, B on the right. Xbox and PlayStation controllers (Cross is at the bottom) and most other controllers.", 11, NO, NSMakeRect(44, 44, 360, 34))];
+   {
+      /* The four face buttons as they sit on each kind of controller */
+      NSArray *diamonds = @[@[@"X", @"Y", @"A", @"B", @114], @[@"Y", @"X", @"B", @"A", @46]];
+      for (NSArray *d in diamonds)
+      {
+         CGFloat y = [[d objectAtIndex:4] doubleValue];
+         NSArray *pos = @[[NSValue valueWithPoint:NSMakePoint(448, y + 36)],
+                          [NSValue valueWithPoint:NSMakePoint(424, y + 18)],
+                          [NSValue valueWithPoint:NSMakePoint(472, y + 18)],
+                          [NSValue valueWithPoint:NSMakePoint(448, y)]];
+         NSUInteger k;
+         for (k = 0; k < 4; k++)
+         {
+            NSPoint pt     = [[pos objectAtIndex:k] pointValue];
+            NSTextField *b = ra_seed_label([d objectAtIndex:k], 12, YES, NSMakeRect(pt.x, pt.y, 20, 18));
+            [b setAlignment:NSTextAlignmentCenter];
+            [b setWantsLayer:YES];
+            [[b layer] setCornerRadius:9];
+            [[b layer] setBackgroundColor:[[NSColor quaternaryLabelColor] CGColor]];
+            [p addSubview:b];
+         }
+      }
+   }
+
    /* Buttons, messages and the copy progress */
    self.error = ra_seed_label(@"", 11, NO, NSMakeRect(24, 92, 492, 18));
    [self.error setTextColor:[NSColor systemRedColor]];
@@ -621,6 +659,16 @@ static NSTextField *ra_seed_label(NSString *text, CGFloat size, BOOL bold, NSRec
    [self.raPass setEnabled:!skip];
 }
 
+- (void)padMode:(id)sender
+{
+   /* Two radio buttons in the same view behave as a group; this keeps
+    * them exclusive however they were clicked */
+   BOOL xbox = (sender == self.padXbox);
+   [self.padXbox setState:xbox ? NSControlStateValueOn : NSControlStateValueOff];
+   [self.padNintendo setState:xbox ? NSControlStateValueOff : NSControlStateValueOn];
+   [self.error setStringValue:@""];
+}
+
 - (void)openZTranslate:(id)sender
 {
    [[NSWorkspace sharedWorkspace] openURL:
@@ -693,6 +741,13 @@ static BOOL ra_seed_value_ok(NSString *s)
          return NO;
       }
    }
+   if (self.page == 4
+         && [self.padNintendo state] != NSControlStateValueOn
+         && [self.padXbox state] != NSControlStateValueOn)
+   {
+      [self.error setStringValue:@"Pick the kind of controller you have, or Skip to use the Nintendo layout."];
+      return NO;
+   }
    if (self.page == 2)
    {
       NSString *a = [self.kioskPass stringValue];
@@ -731,6 +786,11 @@ static BOOL ra_seed_value_ok(NSString *s)
    }
    else if (self.page == 3)
       [self.ztKey setStringValue:@""];
+   else if (self.page == 4)
+   {
+      [self.padNintendo setState:NSControlStateValueOff];
+      [self.padXbox setState:NSControlStateValueOff];
+   }
 }
 
 - (void)advance
@@ -932,6 +992,9 @@ static void ra_seed_apply(RASeedSetup *setup, NSString *app_data)
       cfg = ra_seed_cfg_set(cfg, @"video_font_enable", @"true");
       if ([name length])
          cfg = ra_seed_cfg_set(cfg, @"netplay_nickname", name);
+      /* Nintendo unless Xbox was picked (Skip keeps Nintendo) */
+      cfg = ra_seed_cfg_set(cfg, @"input_remap_layout",
+            [setup.padXbox state] == NSControlStateValueOn ? @"1" : @"0");
       [cfg writeToFile:cfg_path atomically:YES encoding:NSUTF8StringEncoding error:nil];
    }
 
