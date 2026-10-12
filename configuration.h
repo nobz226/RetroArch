@@ -1110,6 +1110,7 @@ typedef struct settings
 
       bool ai_service_enable;
       bool ai_service_pause;
+      bool ai_service_vgtranslate;
 
       bool gamemode_enable;
 #ifdef HAVE_BSV_MOVIE
@@ -1235,6 +1236,7 @@ typedef struct settings
       char kick_stream_key[PATH_MAX_LENGTH];
       char discord_app_id[PATH_MAX_LENGTH];
       char ai_service_url[PATH_MAX_LENGTH];
+      char ai_service_ztranslate_key[128];
 
       char translation_service_url[2048]; /* TODO/FIXME - check size */
 #ifdef HAVE_SMBCLIENT
@@ -1514,6 +1516,11 @@ bool config_save_autoconf_profile(const char *device_name, unsigned user);
  * Returns: true (1) on success, otherwise returns false (0).
  **/
 bool config_save_file(const char *path);
+
+/* User profiles: the active user's folder (user.cfg, keychain.cfg),
+ * or "" for none. Set before the config is loaded. */
+void config_set_user_profile_dir(const char *dir);
+const char *config_get_user_profile_dir(void);
 
 /**
  * config_save_overrides:

@@ -2503,10 +2503,11 @@ bool gfx_widgets_init(
             "xmb",
             sizeof(p_dispwidget->xmb_path)
             );
-      /* Base path */
+      /* Base path: the fonts ship with the Nobz icon theme, since this
+       * build has no Ozone menu (and no assets/ozone folder) */
       fill_pathname_join_special(p_dispwidget->ozone_path,
-            dir_assets,
-            "ozone",
+            p_dispwidget->xmb_path,
+            "nobz",
             sizeof(p_dispwidget->ozone_path));
       fill_pathname_join_special(p_dispwidget->ozone_regular_font_path,
             p_dispwidget->ozone_path, "regular.ttf",
@@ -2514,10 +2515,12 @@ bool gfx_widgets_init(
       fill_pathname_join_special(p_dispwidget->ozone_bold_font_path,
             p_dispwidget->ozone_path, "bold.ttf",
             sizeof(p_dispwidget->ozone_bold_font_path));
+      /* Notification icons come from the Nobz icon theme, the one this
+       * build ships, so they match the menu. */
       fill_pathname_join_special(
             theme_path,
             p_dispwidget->xmb_path,
-            "monochrome",
+            "nobz",
             sizeof(theme_path)
             );
       fill_pathname_join_special(

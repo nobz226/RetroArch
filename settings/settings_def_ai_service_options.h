@@ -25,6 +25,23 @@ S_BOOL(ai_service_pause, AI_SERVICE_PAUSE,
 /* Descriptor and configuration rows are #ifdef HAVE_TRANSLATE; the string
  * tables always carry this row via the strings pass. */
 #if defined(HAVE_TRANSLATE) || defined(SETTINGS_DEF_STRINGS_PASS)
+S_BOOL(ai_service_vgtranslate, AI_SERVICE_VGTRANSLATE,
+      "ai_service_vgtranslate",
+      false, SD_FLAG_NONE, 0, 0,
+      "Use VGTranslate",
+      "Translate with a VGTranslate server on this Mac (localhost:4404) instead of ZTranslate, the online service.")
+#endif
+/* Descriptor and configuration rows are #ifdef HAVE_TRANSLATE; the string
+ * tables always carry this row via the strings pass. */
+#if defined(HAVE_TRANSLATE) || defined(SETTINGS_DEF_STRINGS_PASS)
+S_ACTION_EX(AI_SERVICE_TRANSLATE_NOW,
+      "ai_service_translate_now", SD_FLAG_NONE, setting_action_ok_ai_translate_now, NULL, CMD_EVENT_NONE,
+      "Translate Screen",
+      "Return to the game and translate the text on screen. Press the AI Service hotkey, or pick this again, to hide it.")
+#endif
+/* Descriptor and configuration rows are #ifdef HAVE_TRANSLATE; the string
+ * tables always carry this row via the strings pass. */
+#if defined(HAVE_TRANSLATE) || defined(SETTINGS_DEF_STRINGS_PASS)
 S_UINT_EX(ai_service_source_lang, AI_SERVICE_SOURCE_LANG,
       "ai_service_source_lang",
       DEFAULT_AI_SERVICE_SOURCE_LANG, SD_FLAG_NONE, SDESC_RANGE_MINMAX, 0, TRANSLATION_LANG_DONT_CARE, (TRANSLATION_LANG_LAST-1), 1, 0, setting_action_ok_uint, setting_get_string_representation_uint_ai_service_lang, NULL, NULL, NULL, NULL, 0,

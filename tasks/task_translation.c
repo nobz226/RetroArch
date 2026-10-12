@@ -1361,7 +1361,22 @@ static bool http_translate(
          char new_ai_service_url[PATH_MAX_LENGTH];
          char separator                  = '?';
          const char *ai_service_url      = settings->arrays.ai_service_url;
-         size_t _len                     = strlcpy(new_ai_service_url,
+         size_t _len;
+
+         /* Use VGTranslate: the server on this Mac. Otherwise ZTranslate
+          * when there is a key; the key lives in the keychain, never in
+          * the URL setting, so it is not saved with the config. */
+         if (settings->bools.ai_service_vgtranslate)
+            ai_service_url = "http://localhost:4404/";
+         else if (*settings->arrays.ai_service_ztranslate_key)
+         {
+            static char zt_url[256];
+            snprintf(zt_url, sizeof(zt_url),
+                  "https://ztranslate.net/service?api_key=%s",
+                  settings->arrays.ai_service_ztranslate_key);
+            ai_service_url = zt_url;
+         }
+         _len = strlcpy(new_ai_service_url,
                ai_service_url, sizeof(new_ai_service_url));
 
          /* if query already exists in url, then use &'s instead */

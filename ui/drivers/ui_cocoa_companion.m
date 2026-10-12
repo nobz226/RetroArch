@@ -2734,7 +2734,8 @@ static void cc_thumb_done(void *ud, const char *path, int w, int h,
    {
       [NSApp activateIgnoringOtherApps:YES];
       [host makeKeyAndOrderFront:nil];
-      [host makeMainWindow];
+      if ([host canBecomeMainWindow])
+         [host makeMainWindow];
       if (rv && [rv isKindOfClass:[NSView class]])
          [host makeFirstResponder:(NSView*)rv];
    }
@@ -2761,7 +2762,8 @@ static void cc_thumb_done(void *ud, const char *path, int w, int h,
       return;
    }
    [host makeKeyAndOrderFront:nil];
-   [host makeMainWindow];
+   if ([host canBecomeMainWindow])
+      [host makeMainWindow];
    if (rv && [rv isKindOfClass:[NSView class]])
       [host makeFirstResponder:(NSView*)rv];
    RARCH_LOG("[Companion] focus hand-back: host key=%d main=%d appKey=%s\n",

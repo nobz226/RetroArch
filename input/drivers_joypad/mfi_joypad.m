@@ -779,6 +779,14 @@ void *apple_gamecontroller_joypad_init(void *data)
                                                  {
                                                     apple_gamecontroller_joypad_disconnect([note object]);
                                                  } ];
+   /* Controllers the framework already knows about (something read
+    * [GCController controllers] before this driver started, such as the
+    * macOS user picker) had their connect notice posted before anyone was
+    * listening; pick them up the same way. */
+   dispatch_async(dispatch_get_main_queue(), ^{
+      for (GCController *controller in [GCController controllers])
+         apple_gamecontroller_joypad_connect(controller);
+   });
 #endif
    mfi_inited = true;
    return (void*)-1;

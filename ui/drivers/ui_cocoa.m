@@ -466,6 +466,9 @@ static ui_application_t ui_application_cocoa = {
  * full-screen RAWindow made by -[RetroArch_OSX
  * enterBorderlessFullScreen] needs it to receive keystrokes. */
 - (BOOL)canBecomeKeyWindow { return YES; }
+/* Same for main: AppKit asserts when -makeMainWindow is sent to a
+ * window that cannot become main, and the borderless one can't by default. */
+- (BOOL)canBecomeMainWindow { return YES; }
 
 #define CONVERT_POINT() [[apple_platform renderView] convertPoint:[event locationInWindow] fromView:nil]
 
@@ -789,12 +792,43 @@ static ui_application_t ui_application_cocoa = {
          waiting_argc     -= 2;
       }
    }
-   if (rarch_main(waiting_argc, waiting_argv, NULL))
+   /* AppKit swallows exceptions thrown out of this method, which would
+    * leave a black window with no main loop and nothing in the log.
+    * Log what happened and say so instead. */
+   @try
+   {
+      if (rarch_main(waiting_argc, waiting_argv, NULL))
+         [[NSApplication sharedApplication] terminate:nil];
+   }
+   @catch (NSException *e)
+   {
+      NSAlert *alert = [NSAlert new];
+      RARCH_ERR("[Startup] Exception: %s: %s\n",
+            [[e name] UTF8String], [[e reason] UTF8String]);
+      for (NSString *frame in [e callStackSymbols])
+         RARCH_ERR("[Startup]   %s\n", [frame UTF8String]);
+      [alert setMessageText:@"RetroArch couldn't finish starting"];
+      [alert setInformativeText:[NSString stringWithFormat:
+            @"%@\n\nOpen RetroArch again; the details are in Documents/RetroArch/logs/retroarch.log.",
+            [e reason]]];
+      [alert runModal];
       [[NSApplication sharedApplication] terminate:nil];
+      return;
+   }
 
    waiting_argc = 0;
 
-   [self setupMainWindow];
+   /* Focus is a nicety; it must never stop the main loop from starting
+    * below (an AppKit assert here used to leave a black window). */
+   @try
+   {
+      [self setupMainWindow];
+   }
+   @catch (NSException *e)
+   {
+      RARCH_ERR("[Startup] Could not focus the main window: %s\n",
+            [[e reason] UTF8String]);
+   }
 
 #if HAVE_SWIFT
    if (apple_runtime_available(APPLE_RUNTIME_VER(13, 0, 0), 0, 0)) {
@@ -815,8 +849,14 @@ static ui_application_t ui_application_cocoa = {
 
 - (void)setupMainWindow
 {
-   [self.window makeMainWindow];
-   [self.window makeKeyWindow];
+   /* The window on screen: the borderless one in full screen. A window
+    * that is not on screen yet cannot become main, and asking anyway
+    * is an assertion failure on current macOS. */
+   NSWindow *host = [self hostWindow];
+   if ([host canBecomeMainWindow])
+      [host makeMainWindow];
+   if ([host canBecomeKeyWindow])
+      [host makeKeyWindow];
 }
 
 - (NSWindow *)hostWindow

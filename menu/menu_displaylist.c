@@ -4387,6 +4387,18 @@ static int menu_displaylist_parse_load_content_settings(
                MENU_SETTING_ACTION_CORE_DISK_OPTIONS, 0, 0, NULL))
             count++;
 
+#ifdef HAVE_TRANSLATE
+      /* Screen translation, and which service does it */
+      if (MENU_DISPLAYLIST_PARSE_SETTINGS_ENUM(list,
+               MENU_ENUM_LABEL_AI_SERVICE_TRANSLATE_NOW,
+               PARSE_ACTION, false) == 0)
+         count++;
+      if (MENU_DISPLAYLIST_PARSE_SETTINGS_ENUM(list,
+               MENU_ENUM_LABEL_AI_SERVICE_VGTRANSLATE,
+               PARSE_ONLY_BOOL, false) == 0)
+         count++;
+#endif
+
 #ifdef HAVE_SCREENSHOTS
       if (settings->bools.quick_menu_show_take_screenshot)
       {
@@ -16431,7 +16443,9 @@ static bool menu_displaylist_ctl_internal(
                }
 #endif
 
-#ifdef HAVE_UPDATE_ASSETS
+/* Not offered: this build ships its own asset set (the Nobz icon
+ * theme) and overlays, which these updaters would overwrite. */
+#if defined(HAVE_UPDATE_ASSETS) && 0
                if (menu_entries_append(info->list,
                         msg_hash_to_str(MENU_ENUM_LABEL_VALUE_UPDATE_ASSETS),
                         MENU_ENUM_LABEL_UPDATE_ASSETS_STR,
@@ -16465,12 +16479,14 @@ static bool menu_displaylist_ctl_internal(
 #endif
 #endif /* HAVE_LIBRETRODB */
 #if !defined(_3DS)
+#if 0 /* overlays: see the asset updater above */
                if (menu_entries_append(info->list,
                         msg_hash_to_str(MENU_ENUM_LABEL_VALUE_UPDATE_OVERLAYS),
                         MENU_ENUM_LABEL_UPDATE_OVERLAYS_STR,
                         MENU_ENUM_LABEL_UPDATE_OVERLAYS,
                         MENU_SETTING_ACTION, 0, 0, NULL))
                   count++;
+#endif
 
 #if defined(HAVE_CG) || defined(HAVE_GLSL) || defined(HAVE_SLANG) || defined(HAVE_HLSL)
                if (BIT32_GET(flags.flags, GFX_CTX_FLAGS_SHADERS_CG))

@@ -421,6 +421,7 @@ static NSString *frontend_darwin_seed_target(NSString *rel,
 @property (nonatomic, strong) NSButton *raSignup;
 @property (nonatomic, strong) NSSecureTextField *kioskPass;
 @property (nonatomic, strong) NSSecureTextField *kioskPass2;
+@property (nonatomic, strong) NSTextField *ztKey;
 @property (nonatomic, strong) NSMutableArray *pages;
 @property (nonatomic, strong) NSString *raToken;
 @property (nonatomic, strong) NSString *raVerifiedUser;
@@ -526,6 +527,21 @@ static NSTextField *ra_seed_label(NSString *text, CGFloat size, BOOL bold, NSRec
    [p addSubview:self.kioskPass2];
    [p addSubview:ra_seed_label(@"Skip it to set one later: switching kiosk mode on asks for a new password the first time.", 11, NO, NSMakeRect(24, 60, 492, 32))];
 
+   /* Page 4: screen translation (ZTranslate) */
+   p = [self newPage];
+   [p addSubview:ra_seed_label(@"Screen translation", 16, YES, NSMakeRect(24, 236, 492, 24))];
+   [p addSubview:ra_seed_label(@"Translate Japanese (or any) game text on screen from the Quick Menu. It uses ZTranslate, an online service: create a free account there, then paste its API key here.", 12, NO, NSMakeRect(24, 180, 492, 48))];
+   {
+      NSButton *signup = [NSButton buttonWithTitle:@"Create a ZTranslate Account" target:self action:@selector(openZTranslate:)];
+      [signup setFrame:NSMakeRect(20, 140, 240, 30)];
+      [p addSubview:signup];
+   }
+   [p addSubview:ra_seed_label(@"ZTranslate API key", 12, YES, NSMakeRect(24, 108, 200, 18))];
+   self.ztKey = [[NSTextField alloc] initWithFrame:NSMakeRect(24, 80, 300, 24)];
+   [self.ztKey setPlaceholderString:@"from ztranslate.net > Settings"];
+   [p addSubview:self.ztKey];
+   [p addSubview:ra_seed_label(@"The key is kept in the keychain file with your other logins, not in the settings. Skip it to add one later.", 11, NO, NSMakeRect(24, 40, 492, 32))];
+
    /* Buttons, messages and the copy progress */
    self.error = ra_seed_label(@"", 11, NO, NSMakeRect(24, 92, 492, 18));
    [self.error setTextColor:[NSColor systemRedColor]];
@@ -605,6 +621,12 @@ static NSTextField *ra_seed_label(NSString *text, CGFloat size, BOOL bold, NSRec
    [self.raPass setEnabled:!skip];
 }
 
+- (void)openZTranslate:(id)sender
+{
+   [[NSWorkspace sharedWorkspace] openURL:
+      [NSURL URLWithString:@"https://ztranslate.net/signup"]];
+}
+
 - (void)openSignup:(id)sender
 {
    [[NSWorkspace sharedWorkspace] openURL:
@@ -660,6 +682,17 @@ static BOOL ra_seed_value_ok(NSString *s)
          return NO;
       }
    }
+   if (self.page == 3)
+   {
+      NSString *k = [[self.ztKey stringValue] stringByTrimmingCharactersInSet:
+         [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+      if ([k length] && [k rangeOfCharacterFromSet:
+            [[NSCharacterSet alphanumericCharacterSet] invertedSet]].location != NSNotFound)
+      {
+         [self.error setStringValue:@"A ZTranslate API key has only letters and numbers."];
+         return NO;
+      }
+   }
    if (self.page == 2)
    {
       NSString *a = [self.kioskPass stringValue];
@@ -696,6 +729,8 @@ static BOOL ra_seed_value_ok(NSString *s)
       [self.kioskPass setStringValue:@""];
       [self.kioskPass2 setStringValue:@""];
    }
+   else if (self.page == 3)
+      [self.ztKey setStringValue:@""];
 }
 
 - (void)advance
@@ -913,6 +948,15 @@ static void ra_seed_apply(RASeedSetup *setup, NSString *app_data)
       keys = ra_seed_cfg_set(keys, @"kiosk_mode_password", [setup.kioskPass stringValue]);
       keys_changed = YES;
    }
+   {
+      NSString *zt = [[setup.ztKey stringValue] stringByTrimmingCharactersInSet:
+         [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+      if ([zt length])
+      {
+         keys = ra_seed_cfg_set(keys, @"ai_service_ztranslate_key", zt);
+         keys_changed = YES;
+      }
+   }
    if (keys_changed)
    {
       if (![keys hasSuffix:@"\n"])
@@ -926,7 +970,10 @@ static void ra_seed_apply(RASeedSetup *setup, NSString *app_data)
             [app_data stringByAppendingPathComponent:@"assets/user/avatar.png"]);
 }
 
-static void frontend_darwin_install_seed(const char *application_data,
+#include "platform_darwin_users.m"
+
+/* Returns YES when this launch installed the bundled setup */
+static BOOL frontend_darwin_install_seed(const char *application_data,
       const char *documents_dir)
 {
    @autoreleasepool
@@ -944,12 +991,18 @@ static void frontend_darwin_install_seed(const char *application_data,
       __block volatile NSUInteger copied = 0;
 
       if (![fm fileExistsAtPath:seed isDirectory:&is_dir] || !is_dir)
-         return;
+         return NO;
       if ([fm fileExistsAtPath:[app_data
             stringByAppendingPathComponent:@"config/retroarch.cfg"]])
-         return;
+         return NO;
 
       RARCH_LOG("[Seed] No config yet, installing the bundled setup.\n");
+      /* Permissions first, so the copy into Documents never stops to ask */
+      @try { ra_permissions_run_once(); }
+      @catch (NSException *e)
+      {
+         RARCH_ERR("[Seed] Permissions page failed: %s\n", [[e reason] UTF8String]);
+      }
       setup = [RASeedSetup new];
       [setup buildWithPlaceholder:[seed stringByAppendingPathComponent:
          @"Application Support/RetroArch/assets/user/avatar-placeholder.png"]];
@@ -1048,6 +1101,7 @@ static void frontend_darwin_install_seed(const char *application_data,
       /* Shows the "finishing setup" and "ready" messages once RetroArch is up */
       retroarch_first_run_setup_installed();
       RARCH_LOG("[Seed] Done.\n");
+      return YES;
    }
 }
 #endif
@@ -1108,7 +1162,39 @@ static void frontend_darwin_get_env(int *argc, char *argv[],
 
 #if TARGET_OS_OSX
    if (!portable)
-      frontend_darwin_install_seed(application_data, documents_dir_buf);
+   {
+      BOOL seeded = NO;
+      @try
+      {
+         seeded = frontend_darwin_install_seed(application_data, documents_dir_buf);
+      }
+      @catch (NSException *e)
+      {
+         RARCH_ERR("[Seed] Setup failed: %s: %s\n",
+               [[e name] UTF8String], [[e reason] UTF8String]);
+         for (NSWindow *w in [NSApp windows])
+            if ([w isKindOfClass:[NSPanel class]] && [w isVisible])
+               [w orderOut:nil];
+      }
+      @autoreleasepool
+      {
+         /* Permissions, profiles and "Who's playing?", before the config is
+          * read. A failure here must never stop RetroArch from starting:
+          * it is logged and RetroArch carries on with the shared config. */
+         @try
+         {
+            ra_users_startup([NSString stringWithUTF8String:documents_dir_buf],
+                  [NSString stringWithUTF8String:application_data], seeded);
+         }
+         @catch (NSException *e)
+         {
+            RARCH_ERR("[Users] Startup failed: %s\n", [[e reason] UTF8String]);
+            for (NSWindow *w in [NSApp windows])
+               if ([w isKindOfClass:[NSPanel class]] && [w isVisible])
+                  [w orderOut:nil];
+         }
+      }
+   }
 #endif
 
    /* By the time we are here:
@@ -1636,7 +1722,11 @@ frontend_ctx_driver_t frontend_ctx_darwin = {
    NULL,                            /* exitspawn */
    NULL,                            /* process_args */
    NULL,                            /* exec */
+#if TARGET_OS_OSX
+   frontend_darwin_set_fork,        /* set_fork (Switch User) */
+#else
    NULL,                            /* set_fork */
+#endif
    NULL,                            /* shutdown */
    frontend_darwin_get_name,        /* get_name */
    frontend_darwin_get_os,          /* get_os               */

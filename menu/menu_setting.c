@@ -2994,6 +2994,18 @@ static int setting_action_ok_crt_switch_resolution_super(
    return 0;
 }
 
+#ifdef HAVE_TRANSLATE
+/* Quick Menu > Translate Screen: back to the game first, so what gets
+ * translated (and where the result shows) is the game, not the menu. */
+static int setting_action_ok_ai_translate_now(
+      rarch_setting_t *setting, size_t idx, bool wraparound)
+{
+   command_event(CMD_EVENT_RESUME, NULL);
+   command_event(CMD_EVENT_AI_SERVICE_TOGGLE, NULL);
+   return 0;
+}
+#endif
+
 static int setting_action_ok_uint(
       rarch_setting_t *setting, size_t idx, bool wraparound)
 {
@@ -4701,6 +4713,9 @@ static size_t setting_get_string_representation_uint_xmb_icon_theme(
          case XMB_ICON_THEME_DAITE:
             return strlcpy(s,
                   msg_hash_to_str(MENU_ENUM_LABEL_VALUE_XMB_ICON_THEME_DAITE), len);
+         case XMB_ICON_THEME_NOBZ:
+            return strlcpy(s,
+                  msg_hash_to_str(MENU_ENUM_LABEL_VALUE_XMB_ICON_THEME_NOBZ), len);
       }
    }
    return 0;

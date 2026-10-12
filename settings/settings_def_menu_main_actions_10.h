@@ -9,6 +9,6 @@
 #if (!TARGET_OS_IPHONE && !defined(HAVE_LAKKA)) || defined(SETTINGS_DEF_STRINGS_PASS)
 S_ACTION_EX(RESTART_RETROARCH,
       "restart_retroarch", SD_FLAG_NONE, NULL, NULL, CMD_EVENT_RESTART_RETROARCH,
-      "Restart",
-      "Restart RetroArch application.")
+      "Switch User",
+      "Restart RetroArch and choose who's playing. Each user has their own saves, settings and RetroAchievements account.")
 #endif

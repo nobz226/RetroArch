@@ -61,7 +61,7 @@ S_UINT_EX(menu_xmb_layout, XMB_LAYOUT,
 #if !defined(SETTINGS_DEF_CONFIG_PASS) || (defined(HAVE_MENU))
 S_UINT_EX(menu_xmb_theme, XMB_THEME,
       "xmb_theme",
-      DEFAULT_XMB_ICON_THEME, SD_FLAG_CMD_APPLY_AUTO, SDESC_RANGE_MINMAX, CMD_EVENT_REINIT, 0, XMB_ICON_THEME_LAST - 1, 1, 0, setting_action_ok_uint, setting_get_string_representation_uint_xmb_icon_theme, NULL, NULL, NULL, NULL, ST_UI_TYPE_UINT_COMBOBOX,
+      DEFAULT_XMB_ICON_THEME, SD_FLAG_CMD_APPLY_AUTO, SDESC_RANGE_MINMAX, CMD_EVENT_REINIT, XMB_ICON_THEME_NOBZ, XMB_ICON_THEME_LAST - 1, 1, 0, setting_action_ok_uint, setting_get_string_representation_uint_xmb_icon_theme, NULL, NULL, NULL, NULL, ST_UI_TYPE_UINT_COMBOBOX,
       "Icon Theme",
       "Select a different icon theme for RetroArch.")
 #endif
