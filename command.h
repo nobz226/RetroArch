@@ -156,6 +156,8 @@ enum event_command
    CMD_EVENT_VIDEO_SET_ASPECT_RATIO,
    /* Restarts RetroArch. */
    CMD_EVENT_RESTART_RETROARCH,
+   /* Downloads what changed from the public Nobz setup (macOS) */
+   CMD_EVENT_UPDATE_NOBZ_SETUP,
 #ifdef HAVE_CLOUDSYNC
    /* Trigger cloud sync */
    CMD_EVENT_CLOUD_SYNC,

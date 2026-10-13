@@ -2201,6 +2201,7 @@ static uintptr_t ozone_entries_icon_get_texture(
       case MENU_ENUM_LABEL_DEFERRED_CORE_SYSTEM_FILES_LIST:
             return icons_tex[OZONE_ENTRIES_ICONS_TEXTURE_FILE];
       case MENU_ENUM_LABEL_ONLINE_UPDATER:
+      case MENU_ENUM_LABEL_UPDATE_NOBZ_SETUP:
       case MENU_ENUM_LABEL_UPDATER_SETTINGS:
       case MENU_ENUM_LABEL_DEFERRED_UPDATER_SETTINGS_LIST:
             return icons_tex[OZONE_ENTRIES_ICONS_TEXTURE_UPDATER];

@@ -1034,6 +1034,7 @@ static void ra_seed_apply(RASeedSetup *setup, NSString *app_data)
 }
 
 #include "platform_darwin_users.m"
+#include "platform_darwin_update.m"
 
 /* Returns YES when this launch installed the bundled setup */
 static BOOL frontend_darwin_install_seed(const char *application_data,
@@ -1159,6 +1160,7 @@ static BOOL frontend_darwin_install_seed(const char *application_data,
                encoding:NSUTF8StringEncoding error:nil];
       }
 
+      ra_upd_record_seed(seed, app_data, docs);
       ra_seed_apply(setup, app_data);
       [setup.win orderOut:nil];
       /* Shows the "finishing setup" and "ready" messages once RetroArch is up */
@@ -1227,6 +1229,8 @@ static void frontend_darwin_get_env(int *argc, char *argv[],
    if (!portable)
    {
       BOOL seeded = NO;
+      ra_upd_app_data_dir = [NSString stringWithUTF8String:application_data];
+      ra_upd_docs_dir     = [NSString stringWithUTF8String:documents_dir_buf];
       @try
       {
          seeded = frontend_darwin_install_seed(application_data, documents_dir_buf);

@@ -2434,6 +2434,7 @@ int menu_cbs_init_bind_get_string_representation(menu_file_list_cbs_t *cbs,
 #endif
             return 0;
          case MENU_ENUM_LABEL_RESTART_RETROARCH:
+         case MENU_ENUM_LABEL_UPDATE_NOBZ_SETUP:
          case MENU_ENUM_LABEL_QUIT_RETROARCH:
          case MENU_ENUM_LABEL_SWITCH_GPU_PROFILE:
          case MENU_ENUM_LABEL_REBOOT:

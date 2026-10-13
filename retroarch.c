@@ -93,6 +93,11 @@
 #include <TargetConditionals.h>
 #endif
 
+#if defined(__APPLE__) && !TARGET_OS_IPHONE && defined(HAVE_NETWORKING)
+/* frontend/drivers/platform_darwin_update.m */
+void frontend_darwin_update_nobz_setup(void);
+#endif
+
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
 #include "frontend/drivers/platform_emscripten.h"
@@ -5151,6 +5156,19 @@ bool command_event(enum event_command cmd, void *data)
                   MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_INFO);
             break;
          }
+      case CMD_EVENT_UPDATE_NOBZ_SETUP:
+#if defined(__APPLE__) && !TARGET_OS_IPHONE && defined(HAVE_NETWORKING)
+         /* Cores and Dolphin's shader caches are in use while a game runs */
+         if (runloop_st->flags & RUNLOOP_FLAG_CORE_RUNNING)
+         {
+            const char *_msg = "Close the game first, then update the Nobz setup.";
+            runloop_msg_queue_push(_msg, strlen(_msg), 1, 180, true, NULL,
+                  MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_WARNING);
+            return false;
+         }
+         frontend_darwin_update_nobz_setup();
+#endif
+         break;
       case CMD_EVENT_RESTART_RETROARCH:
          if (!frontend_driver_set_fork(FRONTEND_FORK_RESTART))
             return false;

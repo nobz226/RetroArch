@@ -4549,6 +4549,7 @@ static uintptr_t xmb_icon_get_id(xmb_handle_t *xmb,
       case MENU_ENUM_LABEL_DOWNLOAD_CORE_SYSTEM_FILES:
          return xmb->textures.list[XMB_TEXTURE_FILE];
       case MENU_ENUM_LABEL_ONLINE_UPDATER:
+      case MENU_ENUM_LABEL_UPDATE_NOBZ_SETUP:
       case MENU_ENUM_LABEL_UPDATER_SETTINGS:
          return xmb->textures.list[XMB_TEXTURE_UPDATER];
       case MENU_ENUM_LABEL_UPDATE_LAKKA:

@@ -16764,6 +16764,13 @@ static bool menu_displaylist_ctl_internal(
                            PARSE_ACTION, false) == 0)
                      count++;
 #endif /* HAVE_ONLINE_UPDATER */
+#if defined(__APPLE__) && !TARGET_OS_IPHONE
+               if (!settings->bools.kiosk_mode_enable)
+                  if (MENU_DISPLAYLIST_PARSE_SETTINGS_ENUM(info->list,
+                           MENU_ENUM_LABEL_UPDATE_NOBZ_SETUP,
+                           PARSE_ACTION, false) == 0)
+                     count++;
+#endif
 #endif /* HAVE_NETWORKING */
 
 #ifdef HAVE_MIST
