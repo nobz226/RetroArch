@@ -33,8 +33,10 @@
 #include "../ui/drivers/cocoa/cocoa_menu_extras.h"
 #endif
 
-/* Spin-up: from standstill to full speed in this long, then the launch */
-#define DISC_SPIN_UP_USEC        650000
+/* The disc spins this long before the launch: from standstill to full
+ * speed over DISC_SPIN_ACCEL_USEC, then at full speed */
+#define DISC_SPIN_UP_USEC        1500000
+#define DISC_SPIN_ACCEL_USEC     1000000
 /* Full speed: two turns a second (a literal drive speed would only
  * look still or flicker) */
 #define DISC_SPIN_FULL_SPEED     (2.0f * 2.0f * (float)M_PI)
@@ -216,7 +218,7 @@ float menu_disc_spin_angle(retro_time_t now)
    if (!disc_spin_st.spinning)
       return 0.0f;
    t  = (float)(now - disc_spin_st.start_usec) / 1000000.0f;
-   up = (float)DISC_SPIN_UP_USEC / 1000000.0f;
+   up = (float)DISC_SPIN_ACCEL_USEC / 1000000.0f;
    if (t < 0.0f)
       t = 0.0f;
    /* Even acceleration to full speed, then full speed */

@@ -235,6 +235,10 @@ void cocoa_disc_spin_overlay_show(const char *image_path,
          flipped ? y * sy : bounds.size.height - (y + h) * sy,
          w * sx, h * sy);
    g_disc_spin_layer.zPosition       = 1000.0;
+   /* Only the round disc turns: a square image's corners would sweep
+    * round with it */
+   g_disc_spin_layer.cornerRadius    = 0.495 * MIN(w * sx, h * sy);
+   g_disc_spin_layer.masksToBounds   = YES;
    [g_disc_spin_layer setValue:@(dir * angle) forKeyPath:@"transform.rotation.z"];
    [host addSublayer:g_disc_spin_layer];
 
