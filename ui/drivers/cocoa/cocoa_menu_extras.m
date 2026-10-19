@@ -185,7 +185,9 @@ void cocoa_disc_spin_overlay_show(const char *image_path,
    NSView *view;
    CALayer *host;
    CGImageRef image;
-   NSRect bounds;
+   CGRect bounds;
+   BOOL flipped;
+   float dir;
    float sx, sy;
    CABasicAnimation *spin;
 
@@ -212,11 +214,14 @@ void cocoa_disc_spin_overlay_show(const char *image_path,
          return;
    }
 
-   /* Render-view pixels to the layer's points; layers here have their
-    * origin at the bottom left */
-   bounds = view.bounds;
-   sx     = (float)bounds.size.width  / (float)view_w;
-   sy     = (float)bounds.size.height / (float)view_h;
+   /* Render-view pixels to the layer's points. A layer's origin is at
+    * the bottom left unless its geometry is flipped, which also turns
+    * a positive rotation clockwise. */
+   bounds  = host.bounds;
+   sx      = (float)bounds.size.width  / (float)view_w;
+   sy      = (float)bounds.size.height / (float)view_h;
+   flipped = host.contentsAreFlipped;
+   dir     = flipped ? -1.0f : 1.0f;
 
    [CATransaction begin];
    [CATransaction setDisableActions:YES];
@@ -227,15 +232,15 @@ void cocoa_disc_spin_overlay_show(const char *image_path,
       ? view.window.backingScaleFactor : 1.0;
    g_disc_spin_layer.frame           = CGRectMake(
          x * sx,
-         bounds.size.height - (y + h) * sy,
+         flipped ? y * sy : bounds.size.height - (y + h) * sy,
          w * sx, h * sy);
    g_disc_spin_layer.zPosition       = 1000.0;
-   [g_disc_spin_layer setValue:@(angle) forKeyPath:@"transform.rotation.z"];
+   [g_disc_spin_layer setValue:@(dir * angle) forKeyPath:@"transform.rotation.z"];
    [host addSublayer:g_disc_spin_layer];
 
    spin                     = [CABasicAnimation animationWithKeyPath:@"transform.rotation.z"];
-   spin.fromValue           = @(angle);
-   spin.toValue             = @(angle + 2.0 * M_PI);
+   spin.fromValue           = @(dir * angle);
+   spin.toValue             = @(dir * (angle + 2.0 * M_PI));
    spin.duration            = (2.0 * M_PI) / radians_per_sec;
    spin.repeatCount         = HUGE_VALF;
    spin.removedOnCompletion = NO;
