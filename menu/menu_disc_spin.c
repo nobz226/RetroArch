@@ -27,6 +27,8 @@
 #include "menu_disc_spin.h"
 #include "../configuration.h"
 #include "../retroarch.h"
+#include "../gfx/video_driver.h"
+#include "../gfx/gfx_surface.h"
 #include "../verbosity.h"
 
 #if defined(__APPLE__)
@@ -77,6 +79,11 @@ static struct
    unsigned core_frames;
    bool spinning;        /* menu spin-up */
    bool overlay;         /* macOS layer up while loading */
+   bool handover;        /* layer up, menu no longer draws the disc */
+   unsigned handover_frames;
+
+   /* The disc alone, shrunk to the size it is drawn at */
+   uintptr_t texture;
    bool launching;       /* inside launch(): don't hold it again */
 
    struct disc_spin_system systems[DISC_SPIN_CACHE_SIZE];
@@ -196,6 +203,10 @@ static int disc_spin_walk(const uint32_t *px, int count, int step)
    return -1;
 }
 
+static void disc_spin_make_texture(const struct texture_image *img,
+      unsigned size);
+static void disc_spin_free_texture(void);
+
 static void disc_spin_find_disc(const char *path)
 {
    struct texture_image img;
@@ -206,8 +217,10 @@ static void disc_spin_find_disc(const char *path)
    disc_spin_st.disc_u1 = 0.995f;
    disc_spin_st.disc_v1 = 0.995f;
 
+   disc_spin_free_texture();
    memset(&img, 0, sizeof(img));
-   img.supports_rgba = true;
+   /* The video driver's pixel order: the disc is uploaded from these */
+   img.supports_rgba = gfx_surface_wants_rgba();
    if (!image_texture_load(&img, path))
       return;
    if (img.pixels && img.width > 16 && img.height > 16)
@@ -251,7 +264,92 @@ static void disc_spin_find_disc(const char *path)
          }
       }
    }
+   if (img.pixels)
+   {
+      /* Drawn at the disc's on-screen size, in whole pixels */
+      float dw = (disc_spin_st.disc_u1 - disc_spin_st.disc_u0) * disc_spin_st.icon_w;
+      float dh = (disc_spin_st.disc_v1 - disc_spin_st.disc_v0) * disc_spin_st.icon_h;
+      disc_spin_make_texture(&img, (unsigned)((dw > dh ? dw : dh) + 0.5f));
+   }
    image_texture_free(&img);
+}
+
+/* The disc's box of the picture, area-averaged down to @size x @size
+ * (weighted by alpha, so see-through pixels don't darken its edge) and
+ * handed to the video driver. A scan several times the size it is drawn
+ * at, sampled straight down while it turns, shimmers in moving patterns
+ * where the disc has fine detail. */
+static void disc_spin_make_texture(const struct texture_image *img,
+      unsigned size)
+{
+   struct texture_image small;
+   int w  = (int)img->width, h = (int)img->height;
+   int x0 = (int)(disc_spin_st.disc_u0 * w), y0 = (int)(disc_spin_st.disc_v0 * h);
+   int x1 = (int)(disc_spin_st.disc_u1 * w), y1 = (int)(disc_spin_st.disc_v1 * h);
+   unsigned dx, dy;
+
+   if (size < 8 || x1 - x0 < 8 || y1 - y0 < 8)
+      return;
+   memset(&small, 0, sizeof(small));
+   small.width         = size;
+   small.height        = size;
+   small.supports_rgba = img->supports_rgba;
+   if (!(small.pixels = (uint32_t*)malloc(sizeof(uint32_t) * size * size)))
+      return;
+
+   for (dy = 0; dy < size; dy++)
+   {
+      int sy0 = y0 + (int)((int64_t)(y1 - y0) * dy / size);
+      int sy1 = y0 + (int)((int64_t)(y1 - y0) * (dy + 1) / size);
+      if (sy1 <= sy0)
+         sy1 = sy0 + 1;
+      for (dx = 0; dx < size; dx++)
+      {
+         int sx0 = x0 + (int)((int64_t)(x1 - x0) * dx / size);
+         int sx1 = x0 + (int)((int64_t)(x1 - x0) * (dx + 1) / size);
+         uint64_t c0 = 0, c1 = 0, c2 = 0, ca = 0, n = 0;
+         int sx, sy;
+         uint32_t out = 0;
+         if (sx1 <= sx0)
+            sx1 = sx0 + 1;
+         for (sy = sy0; sy < sy1 && sy < h; sy++)
+         {
+            const uint32_t *row = img->pixels + (size_t)sy * w;
+            for (sx = sx0; sx < sx1 && sx < w; sx++)
+            {
+               uint32_t px = row[sx];
+               uint32_t a  = px >> 24;
+               c0 += (uint64_t)( px        & 0xff) * a;
+               c1 += (uint64_t)((px >>  8) & 0xff) * a;
+               c2 += (uint64_t)((px >> 16) & 0xff) * a;
+               ca += a;
+               n++;
+            }
+         }
+         if (n && ca)
+            out = (uint32_t)(c0 / ca)
+                | (uint32_t)(c1 / ca) <<  8
+                | (uint32_t)(c2 / ca) << 16
+                | (uint32_t)((ca + n / 2) / n) << 24;
+         small.pixels[(size_t)dy * size + dx] = out;
+      }
+   }
+
+   video_driver_texture_load(&small, TEXTURE_FILTER_LINEAR,
+         &disc_spin_st.texture);
+   free(small.pixels);
+}
+
+static void disc_spin_free_texture(void)
+{
+   if (disc_spin_st.texture)
+      video_driver_texture_unload(&disc_spin_st.texture);
+   disc_spin_st.texture = 0;
+}
+
+uintptr_t menu_disc_spin_texture(void)
+{
+   return disc_spin_st.spinning ? disc_spin_st.texture : 0;
 }
 
 void menu_disc_spin_disc_box(float *u0, float *v0, float *u1, float *v1)
@@ -301,6 +399,7 @@ bool menu_disc_spin_begin(menu_disc_spin_launch_t launch,
    disc_spin_st.idx         = idx;
    disc_spin_st.entry_idx   = entry_idx;
    disc_spin_st.start_usec  = cpu_features_get_time_usec();
+   disc_spin_st.handover    = false;
    disc_spin_st.spinning    = true;
    return true;
 }
@@ -308,6 +407,11 @@ bool menu_disc_spin_begin(menu_disc_spin_launch_t launch,
 bool menu_disc_spin_active(void)
 {
    return disc_spin_st.spinning;
+}
+
+bool menu_disc_spin_handed_over(void)
+{
+   return disc_spin_st.spinning && disc_spin_st.handover;
 }
 
 float menu_disc_spin_angle(retro_time_t now)
@@ -346,8 +450,17 @@ bool menu_disc_spin_iterate(retro_time_t now)
       return true;
 
 #ifdef HAVE_COCOA_MENU_EXTRAS
-   /* Keep it turning while the load blocks the menu */
-   if (disc_spin_st.icon_valid)
+   /* Keep it turning while the load blocks the menu. The layer takes
+    * over first and the menu stops drawing the disc under it - where
+    * the disc is see-through (the clear ring, soft edges) the menu's
+    * last frame would show a still copy behind the turning one - and
+    * the launch waits until a frame without it is on screen. */
+   if (disc_spin_st.handover)
+   {
+      if (++disc_spin_st.handover_frames < 3)
+         return true;
+   }
+   else if (disc_spin_st.icon_valid)
    {
       /* Just the disc, from its box in the picture */
       float u0 = disc_spin_st.disc_u0, v0 = disc_spin_st.disc_v0;
@@ -360,10 +473,16 @@ bool menu_disc_spin_iterate(retro_time_t now)
             (v1 - v0) * disc_spin_st.icon_h,
             disc_spin_st.video_width, disc_spin_st.video_height,
             menu_disc_spin_angle(now), DISC_SPIN_FULL_SPEED);
-      disc_spin_st.overlay = true;
+      disc_spin_st.overlay         = true;
+      disc_spin_st.handover        = true;
+      disc_spin_st.handover_frames = 0;
+      return true;
    }
 #endif
 
+   /* The load may rebuild the video driver, and the menu is not
+    * drawing the disc any more: let it go now */
+   disc_spin_free_texture();
    launch                     = disc_spin_st.launch;
    disc_spin_st.core_frames   = 0;
    disc_spin_st.launching     = true;
@@ -371,6 +490,7 @@ bool menu_disc_spin_iterate(retro_time_t now)
          disc_spin_st.type, disc_spin_st.idx, disc_spin_st.entry_idx);
    disc_spin_st.launching     = false;
    disc_spin_st.spinning      = false;
+   disc_spin_st.handover      = false;
    disc_spin_st.icon_valid    = false;
 
    /* Nothing loaded (an error, or the core missing): stop here */

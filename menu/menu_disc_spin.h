@@ -54,10 +54,18 @@ bool menu_disc_spin_begin(menu_disc_spin_launch_t launch,
 /* True from Run until the content has loaded (or failed to) */
 bool menu_disc_spin_active(void);
 
+/* True once the macOS layer has taken the disc over: the menu leaves
+ * the disc out, so nothing shows behind the layer's see-through parts */
+bool menu_disc_spin_handed_over(void);
+
 /* Where the disc is in its picture while it spins: a box from the
  * top left, 0..1 of the picture's width and height. The menu draws
  * that box as a round disc turning about its own centre. */
 void menu_disc_spin_disc_box(float *u0, float *v0, float *u1, float *v1);
+
+/* While spinning: the disc alone (its box, see above), shrunk to the
+ * size it is drawn at - 0 if there is none, then draw the picture */
+uintptr_t menu_disc_spin_texture(void);
 
 /* Current rotation in radians, counter-clockwise */
 float menu_disc_spin_angle(retro_time_t now);

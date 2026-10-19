@@ -1134,6 +1134,7 @@ static void xmb_draw_spinning_icon(
       uintptr_t texture,
       float x, float y, float w, float h,
       float u0, float v0, float u1, float v1,
+      uintptr_t disc_texture,
       float angle)
 {
    unsigned i, n;
@@ -1149,6 +1150,7 @@ static void xmb_draw_spinning_icon(
    float c              = cosf(angle);
    float s              = sinf(angle);
    float tcu, tcv, tru, trv, det;
+   float scu, scv, sru, srv;   /* the same disc where it is sampled */
    float a00, a01, a10, a11;   /* texture coordinates per vertex unit */
 
    if (!dispctx || !texture || w < 1.0f || h < 1.0f)
@@ -1171,11 +1173,21 @@ static void xmb_draw_spinning_icon(
    if (det == 0.0f)
       return;
 
-   /* The disc in texture space (the picture: u across, v down) */
+   /* The disc in texture space (the picture: u across, v down). The
+    * disc's own texture is just that box, so it samples all of it. */
    tcu = (u0 + u1) * 0.5f;
    tcv = (v0 + v1) * 0.5f;
    tru = (u1 - u0) * 0.5f;
    trv = (v1 - v0) * 0.5f;
+   if (disc_texture)
+   {
+      scu = scv = sru = srv = 0.5f;
+      texture = disc_texture;
+   }
+   else
+   {
+      scu = tcu; scv = tcv; sru = tru; srv = trv;
+   }
 
 #define XMB_DISC_PUT(tu_, tv_, su_, sv_) \
    do { \
@@ -1209,10 +1221,10 @@ static void xmb_draw_spinning_icon(
          float rx = c * ux - s * uy;
          float ry = s * ux + c * uy;
          XMB_DISC_PUT(tcu + tru * ux, tcv + trv * uy,
-               tcu + tru * rx, tcv + trv * ry);
+               scu + sru * rx, scv + srv * ry);
          /* The last rim point closes the circle; no centre after it */
          if (i < XMB_DISC_SEGMENTS)
-            XMB_DISC_PUT(tcu, tcv, tcu, tcv);
+            XMB_DISC_PUT(tcu, tcv, scu, scv);
       }
    }
    else
@@ -1226,7 +1238,7 @@ static void xmb_draw_spinning_icon(
          float rx = c * ux - s * uy;
          float ry = s * ux + c * uy;
          XMB_DISC_PUT(tcu + tru * ux, tcv + trv * uy,
-               tcu + tru * rx, tcv + trv * ry);
+               scu + sru * rx, scv + srv * ry);
       }
    }
 #undef XMB_DISC_PUT
@@ -9820,12 +9832,14 @@ static void xmb_frame(void *data, video_frame_info_t *video_info)
             if (menu_disc_spin_active())
             {
                float u0, v0, u1, v1;
+               uintptr_t disc = menu_disc_spin_texture();
                menu_disc_spin_disc_box(&u0, &v0, &u1, &v1);
-               xmb_draw_spinning_icon(userdata, p_disp, dispctx,
-                     video_width, video_height, icon_thumbnail->texture,
-                     draw_x, draw_y, gfx_icon_width_draw, gfx_icon_height_draw,
-                     u0, v0, u1, v1,
-                     menu_disc_spin_angle(cpu_features_get_time_usec()));
+               if (!menu_disc_spin_handed_over())
+                  xmb_draw_spinning_icon(userdata, p_disp, dispctx,
+                        video_width, video_height, icon_thumbnail->texture,
+                        draw_x, draw_y, gfx_icon_width_draw, gfx_icon_height_draw,
+                        u0, v0, u1, v1, disc,
+                        menu_disc_spin_angle(cpu_features_get_time_usec()));
                icon_thumbnail = NULL;
             }
          }

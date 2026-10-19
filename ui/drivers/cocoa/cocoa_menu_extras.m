@@ -228,6 +228,32 @@ void cocoa_disc_spin_overlay_show(const char *image_path,
          return;
    }
 
+   /* Shrunk to the pixels it covers with a proper filter first: a scan
+    * several times that size, sampled straight down while it turns,
+    * shimmers in moving patterns where the disc has fine detail */
+   {
+      size_t pw = (size_t)(w + 0.5f), ph = (size_t)(h + 0.5f);
+      CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+      CGContextRef ctx   = (pw > 0 && ph > 0
+            && (pw < CGImageGetWidth(image) || ph < CGImageGetHeight(image)))
+         ? CGBitmapContextCreate(NULL, pw, ph, 8, 0, cs,
+               kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big)
+         : NULL;
+      CGColorSpaceRelease(cs);
+      if (ctx)
+      {
+         CGImageRef small;
+         CGContextSetInterpolationQuality(ctx, kCGInterpolationHigh);
+         CGContextDrawImage(ctx, CGRectMake(0, 0, pw, ph), image);
+         if ((small = CGBitmapContextCreateImage(ctx)))
+         {
+            CGImageRelease(image);
+            image = small;
+         }
+         CGContextRelease(ctx);
+      }
+   }
+
    /* Render-view pixels to the layer's points. A layer's origin is at
     * the bottom left unless its geometry is flipped, which also turns
     * a positive rotation clockwise. */
@@ -243,6 +269,7 @@ void cocoa_disc_spin_overlay_show(const char *image_path,
    g_disc_spin_layer.contents        = (__bridge id)image;
    /* Filled, so a slightly oval scan turns as a round disc */
    g_disc_spin_layer.contentsGravity = kCAGravityResize;
+   g_disc_spin_layer.minificationFilter = kCAFilterTrilinear;
    g_disc_spin_layer.contentsScale   = view.window
       ? view.window.backingScaleFactor : 1.0;
    g_disc_spin_layer.frame           = CGRectMake(
