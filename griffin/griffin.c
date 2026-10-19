@@ -1570,6 +1570,8 @@ MENU
 #ifdef HAVE_MENU
 #include "../menu/menu_str.c"
 #include "../menu/menu_driver.c"
+#include "../menu/menu_disc_spin.c"
+#include "../menu/menu_manual.c"
 #include "../menu/menu_setting.c"
 #if defined(HAVE_MATERIALUI) || defined(HAVE_XMB) || defined(HAVE_OZONE)
 #include "../menu/menu_screensaver.c"

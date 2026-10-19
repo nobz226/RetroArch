@@ -152,6 +152,7 @@ bool android_get_vfs_authorized_locations(
 #ifdef HAVE_MENU
 #include "menu/menu_cbs.h"
 #include "menu/menu_driver.h"
+#include "menu/menu_disc_spin.h"
 #include "menu/menu_input.h"
 #endif
 
@@ -8611,6 +8612,12 @@ int runloop_iterate(void)
 #endif
          core_run();
    }
+
+#ifdef HAVE_MENU
+   /* The game is showing its own frames: a disc spun up for its
+    * launch stops */
+   menu_disc_spin_core_frame();
+#endif
 
    /* Increment runtime tick counter after each call to
     * core_run() or run_ahead() */

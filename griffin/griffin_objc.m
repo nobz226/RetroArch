@@ -48,6 +48,7 @@
 
 #if TARGET_OS_OSX
 #include "../ui/drivers/ui_cocoa.m"
+#include "../ui/drivers/cocoa/cocoa_menu_extras.m"
 #include "../ui/drivers/ui_cocoa_companion.m"
 #else
 #include "../ui/drivers/ui_cocoatouch.m"

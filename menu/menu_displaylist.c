@@ -94,6 +94,7 @@
 #endif
 #include "menu_cbs.h"
 #include "menu_driver.h"
+#include "menu_manual.h"
 #include "menu_dirwalk.h"
 #include "menu_entries.h"
 #if defined(HAVE_CG) || defined(HAVE_GLSL) || defined(HAVE_SLANG) || defined(HAVE_HLSL)
@@ -4279,6 +4280,15 @@ static int menu_displaylist_parse_load_content_settings(
                MENU_SETTING_ACTION_RUN, 0, 0, NULL))
             count++;
 
+      /* The running game's manual, when it has one */
+      if (menu_manual_available())
+         if (menu_entries_append(list,
+               msg_hash_to_str(MENU_ENUM_LABEL_VALUE_GAME_MANUAL),
+               MENU_ENUM_LABEL_GAME_MANUAL_STR,
+               MENU_ENUM_LABEL_GAME_MANUAL,
+               MENU_SETTING_ACTION, 0, 0, NULL))
+            count++;
+
       /* Note: Entry type depends on whether quick menu
        * was accessed via a playlist ('horizontal content')
        * or the main menu
@@ -4737,6 +4747,14 @@ static int menu_displaylist_parse_horizontal_content_actions(
             MENU_ENUM_LABEL_RUN_STR,
             MENU_ENUM_LABEL_RUN,
             FILE_TYPE_PLAYLIST_ENTRY, 0, idx, NULL);
+
+      /* The game's manual, when it has one */
+      if (menu_manual_available())
+         menu_entries_append(list,
+               msg_hash_to_str(MENU_ENUM_LABEL_VALUE_GAME_MANUAL),
+               MENU_ENUM_LABEL_GAME_MANUAL_STR,
+               MENU_ENUM_LABEL_GAME_MANUAL,
+               MENU_SETTING_ACTION, 0, idx, NULL);
 
       if (settings->bools.quick_menu_show_save_load_state)
       {
@@ -13457,6 +13475,7 @@ unsigned menu_displaylist_build_list(
                {MENU_ENUM_LABEL_XMB_LAYOUT,                                   PARSE_ONLY_UINT,   true},
                {MENU_ENUM_LABEL_MENU_RGUI_SHADOWS,                            PARSE_ONLY_BOOL,   true},
                {MENU_ENUM_LABEL_XMB_SHADOWS_ENABLE,                           PARSE_ONLY_BOOL,   true},
+               {MENU_ENUM_LABEL_XMB_DISC_SPIN,                                PARSE_ONLY_BOOL,   true},
                {MENU_ENUM_LABEL_MENU_TEXTURE_MIPMAPPING,                      PARSE_ONLY_BOOL,   true},
                {MENU_ENUM_LABEL_MATERIALUI_ICONS_ENABLE,                      PARSE_ONLY_BOOL,   true},
                {MENU_ENUM_LABEL_MATERIALUI_PLAYLIST_ICONS_ENABLE,             PARSE_ONLY_BOOL,   false},

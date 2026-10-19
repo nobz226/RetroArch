@@ -50,6 +50,8 @@
 #include "menu_driver.h"
 #include "menu_dirwalk.h"
 #include "menu_cbs.h"
+#include "menu_disc_spin.h"
+#include "menu_manual.h"
 #include "../driver.h"
 #include "../list_special.h"
 #include "../msg_hash_lbl_str.h"
@@ -4549,6 +4551,12 @@ void menu_driver_frame(bool menu_is_alive, video_frame_info_t *video_info)
       /* Nothing the menu gathered may still be waiting when the frame
        * it belongs to is over */
       gfx_display_flush_batch(p_disp);
+      /* A game manual being read goes over the whole menu */
+      if (menu_manual_is_active())
+      {
+         menu_manual_frame(video_info);
+         gfx_display_flush_batch(p_disp);
+      }
       /* The statistics overlay, on top of the menu when it is not
        * hidden here; drivers only draw it themselves without a menu. */
       if (     video_info->statistics_show
@@ -6772,6 +6780,8 @@ void menu_driver_toggle(
    }
    else
    {
+      /* Leaving the menu closes a manual that was being read */
+      menu_manual_close();
 #ifdef HAVE_LAKKA
       set_cpu_scaling_signal(CPUSCALING_EVENT_FOCUS_CORE);
 #endif
@@ -7074,6 +7084,7 @@ bool menu_driver_ctl(enum rarch_menu_ctl_state state, void *data)
          }
          break;
       case RARCH_MENU_CTL_DEINIT:
+         menu_manual_close();
          if (     menu_st->driver_ctx
                && menu_st->driver_ctx->context_destroy)
             menu_st->driver_ctx->context_destroy(menu_st->userdata);
@@ -8521,6 +8532,19 @@ bool menu_driver_iterate(
       retro_time_t current_time)
 {
    menu_driver_pump_pending(menu_st, settings);
+
+   /* A game manual open: every button is the viewer's */
+   if (menu_manual_is_active())
+   {
+      if (action != MENU_ACTION_NOOP)
+         menu_manual_action(action);
+      return menu_st->driver_data != NULL;
+   }
+
+   /* A disc spinning up before its game starts: hold the menu, then
+    * launch */
+   if (menu_disc_spin_iterate(current_time))
+      return menu_st->driver_data != NULL;
 
    return ( menu_st->driver_data
          && generic_menu_iterate(

@@ -129,6 +129,7 @@ void frontend_darwin_update_nobz_setup(void);
 
 #ifdef HAVE_MENU
 #include "menu/menu_driver.h"
+#include "menu/menu_manual.h"
 #endif
 
 #include "location_driver.h"
@@ -1945,6 +1946,8 @@ void driver_uninit(int flags, enum driver_lifetime_flags lifetime_flags)
        * in-flight threaded frame still references the resources
        * being freed. */
       struct menu_state *menu_st = menu_state_get_ptr();
+      /* Its pages are textures of the video driver going away */
+      menu_manual_close();
       if (     menu_st->driver_ctx
             && menu_st->driver_ctx->context_destroy)
          menu_st->driver_ctx->context_destroy(menu_st->userdata);

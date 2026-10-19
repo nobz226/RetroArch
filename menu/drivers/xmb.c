@@ -42,6 +42,7 @@
 #include "../../frontend/frontend_driver.h"
 
 #include "../menu_driver.h"
+#include "../menu_disc_spin.h"
 #include "../menu_str.h"
 #include "../menu_entries.h"
 #include "../menu_screensaver.h"
@@ -1112,6 +1113,76 @@ static void *xmb_list_get_entry(void *data,
    }
 
    return NULL;
+}
+
+/* A disc icon turning in place: the quad stays put and its texture
+ * coordinates turn about the centre, so the round disc rotates within
+ * its square without the stretching a matrix rotation gives on a
+ * non-square viewport. @angle is counter-clockwise, in radians. */
+static void xmb_draw_spinning_icon(
+      void *userdata,
+      gfx_display_t *p_disp,
+      gfx_display_ctx_driver_t *dispctx,
+      unsigned video_width,
+      unsigned video_height,
+      uintptr_t texture,
+      float x, float y, float w, float h,
+      float angle)
+{
+   unsigned i;
+   gfx_display_ctx_draw_t draw;
+   struct video_coords coords;
+   math_matrix_4x4 mymat;
+   float tex_coord[8];
+   const float *def_tex = NULL;
+   float c              = cosf(angle);
+   float s              = sinf(angle);
+   float white[16]      = {
+      1.0f, 1.0f, 1.0f, 1.0f,
+      1.0f, 1.0f, 1.0f, 1.0f,
+      1.0f, 1.0f, 1.0f, 1.0f,
+      1.0f, 1.0f, 1.0f, 1.0f
+   };
+
+   if (!dispctx || !texture || w < 1.0f || h < 1.0f)
+      return;
+   if (dispctx->get_default_tex_coords)
+      def_tex = dispctx->get_default_tex_coords();
+   if (!def_tex)
+      return;
+
+   /* Image coordinates run down the screen, so a counter-clockwise turn
+    * on screen samples the texture through the opposite rotation */
+   for (i = 0; i < 4; i++)
+   {
+      float du             = def_tex[i * 2]     - 0.5f;
+      float dv             = def_tex[i * 2 + 1] - 0.5f;
+      tex_coord[i * 2]     = 0.5f + c * du - s * dv;
+      tex_coord[i * 2 + 1] = 0.5f + s * du + c * dv;
+   }
+
+   gfx_display_blend_begin(dispctx, userdata);
+   if (!dispctx->handles_transform)
+      gfx_display_rotate_z(p_disp, &mymat, 1.0f, 0.0f, userdata);
+
+   coords.vertices      = 4;
+   coords.vertex        = NULL;
+   coords.tex_coord     = tex_coord;
+   coords.lut_tex_coord = NULL;
+   coords.color         = white;
+
+   draw.scale_factor    = 1.0f;
+   draw.rotation        = 0.0f;
+   draw.coords          = &coords;
+   draw.matrix_data     = &mymat;
+   draw.texture         = texture;
+   draw.pipeline_id     = 0;
+   draw.dims            = VIDEO_SCALE_PACK((unsigned)(w + 0.5f), (unsigned)(h + 0.5f));
+   draw.pos             = VIDEO_POS_PACK(VIDEO_PX(x),
+         VIDEO_PX((float)video_height - y - h));
+   gfx_display_draw(dispctx, &draw, userdata,
+         VIDEO_SCALE_PACK(video_width, video_height));
+   gfx_display_blend_end(dispctx, userdata);
 }
 
 static void xmb_draw_icon(
@@ -4467,6 +4538,8 @@ static uintptr_t xmb_icon_get_id(xmb_handle_t *xmb,
          break;
       case MENU_ENUM_LABEL_RENAME_ENTRY:
          return xmb->textures.list[XMB_TEXTURE_RENAME];
+      case MENU_ENUM_LABEL_GAME_MANUAL:
+         return xmb->textures.list[XMB_TEXTURE_HELP];
       case MENU_ENUM_LABEL_RESUME_CONTENT:
       case MENU_ENUM_LABEL_QUICK_MENU_SHOW_RESUME_CONTENT:
          return xmb->textures.list[XMB_TEXTURE_RESUME];
@@ -9610,6 +9683,9 @@ static void xmb_frame(void *data, video_frame_info_t *video_info)
          &xmb_item_color[0],
          &mymat);
 
+   /* Reported again below while the Run menu shows a game's icon */
+   menu_disc_spin_clear_icon();
+
    /* Show icon thumbnail instead if enabled */
    if (     (xmb->is_quick_menu || xmb->is_playlist)
          && video_info->menu.icon_thumbnails)
@@ -9659,17 +9735,40 @@ static void xmb_frame(void *data, video_frame_info_t *video_info)
          else if (gfx_icon_x > gfx_icon_x_margin + playlist_extra_x)
             gfx_icon_x = gfx_icon_x_margin + playlist_extra_x;
 
-         gfx_thumbnail_draw(
-               userdata,
-               VIDEO_SCALE_PACK(video_width, video_height),
-               icon_thumbnail,
-               gfx_icon_x,
-               gfx_icon_y,
-               VIDEO_SCALE_PACK(gfx_icon_width, gfx_icon_height),
-               GFX_THUMBNAIL_ALIGN_CENTRE,
-               1.0f,
-               1.0f,
-               &thumbnail_shadow);
+         /* The game's Run menu: tell the disc spin-up where this icon
+          * is, and draw it turning while it spins */
+         if (     xmb->is_quick_menu
+               && icon_thumbnail->status == GFX_THUMBNAIL_STATUS_AVAILABLE
+               && menu_st->thumbnail_path_data
+               && *menu_st->thumbnail_path_data->icon_path)
+         {
+            float draw_x = gfx_icon_x + (gfx_icon_width  - gfx_icon_width_draw)  / 2.0f;
+            float draw_y = gfx_icon_y + (gfx_icon_height - gfx_icon_height_draw) / 2.0f;
+            menu_disc_spin_set_icon(menu_st->thumbnail_path_data->icon_path,
+                  draw_x, draw_y, gfx_icon_width_draw, gfx_icon_height_draw,
+                  video_width, video_height);
+            if (menu_disc_spin_active())
+            {
+               xmb_draw_spinning_icon(userdata, p_disp, dispctx,
+                     video_width, video_height, icon_thumbnail->texture,
+                     draw_x, draw_y, gfx_icon_width_draw, gfx_icon_height_draw,
+                     menu_disc_spin_angle(cpu_features_get_time_usec()));
+               icon_thumbnail = NULL;
+            }
+         }
+
+         if (icon_thumbnail)
+            gfx_thumbnail_draw(
+                  userdata,
+                  VIDEO_SCALE_PACK(video_width, video_height),
+                  icon_thumbnail,
+                  gfx_icon_x,
+                  gfx_icon_y,
+                  VIDEO_SCALE_PACK(gfx_icon_width, gfx_icon_height),
+                  GFX_THUMBNAIL_ALIGN_CENTRE,
+                  1.0f,
+                  1.0f,
+                  &thumbnail_shadow);
       }
    }
 
