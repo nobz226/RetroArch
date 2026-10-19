@@ -1157,6 +1157,8 @@ endif
 ifeq ($(HAVE_MENU_COMMON), 1)
    OBJ += menu/menu_setting.o \
           menu/menu_driver.o \
+          menu/menu_disc_spin.o \
+          menu/menu_manual.o \
           menu/menu_str.o \
           menu/cbs/menu_cbs_ok.o \
           menu/cbs/menu_cbs_cancel.o \
@@ -2809,7 +2811,8 @@ ifeq ($(HAVE_COCOA), 1)
    OBJ += input/drivers/cocoa_input.o \
           ui/drivers/ui_cocoa.o \
           ui/drivers/ui_cocoa_companion.o \
-          ui/drivers/cocoa/cocoa_common.o
+          ui/drivers/cocoa/cocoa_common.o \
+          ui/drivers/cocoa/cocoa_menu_extras.o
    # HAVE_COCOA_COMMON is only known here, after the companion-core
    # block above ran; add the shared core if Qt/Win32 did not already.
    ifneq ($(HAVE_COMPANION_CORE), 1)

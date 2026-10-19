@@ -24197,6 +24197,14 @@ MSG_HASH(
    "Rename the title of the entry."
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_GAME_MANUAL,
+   "Manual"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_GAME_MANUAL,
+   "Read this game's instruction manual."
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_VALUE_DELETE_ENTRY,
    "Remove"
    )

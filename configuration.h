@@ -816,6 +816,7 @@ typedef struct settings
       bool menu_rgui_switch_icons;
       bool menu_rgui_particle_effect_screensaver;
       bool menu_xmb_shadows_enable;
+      bool menu_xmb_disc_spin;
       bool menu_xmb_show_horizontal_list;
       bool menu_xmb_show_title_header;
       bool menu_xmb_entry_icons;

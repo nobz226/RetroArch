@@ -50,6 +50,8 @@
 #include "../../file_path_special.h"
 
 #include "../menu_driver.h"
+#include "../menu_disc_spin.h"
+#include "../menu_manual.h"
 #include "../menu_cbs.h"
 #include "../menu_displaylist.h"
 #include "../menu_entries.h"
@@ -2947,6 +2949,13 @@ static bool playlist_entry_path_is_valid(const char *entry_path)
    return path_is_valid(entry_path);
 }
 
+static int action_ok_game_manual(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   menu_manual_open();
+   return 0;
+}
+
 static int action_ok_playlist_entry_collection(const char *path,
       const char *label, unsigned type, size_t idx, size_t entry_idx)
 {
@@ -2981,6 +2990,13 @@ static int action_ok_playlist_entry_collection(const char *path,
 
    if (!menu)
       goto error;
+
+   /* Run on a disc system's game: its disc spins up first, and the
+    * spin-up calls back here to launch */
+   if (     string_is_equal(label, MENU_ENUM_LABEL_RUN_STR)
+         && menu_disc_spin_begin(action_ok_playlist_entry_collection,
+               path, label, type, idx, entry_idx))
+      return 0;
 
    /* Get playlist */
    if (!(tmp_playlist = playlist_get_cached()))
@@ -9663,6 +9679,7 @@ static int menu_cbs_init_bind_ok_compare_label(menu_file_list_cbs_t *cbs,
          {MENU_ENUM_LABEL_RESTART_CONTENT,                     action_ok_restart_content},
          {MENU_ENUM_LABEL_TAKE_SCREENSHOT,                     action_ok_screenshot},
          {MENU_ENUM_LABEL_RENAME_ENTRY,                        action_ok_rename_entry},
+         {MENU_ENUM_LABEL_GAME_MANUAL,                         action_ok_game_manual},
          {MENU_ENUM_LABEL_DELETE_ENTRY,                        action_ok_delete_entry},
          {MENU_ENUM_LABEL_MENU_DISABLE_KIOSK_MODE,             action_ok_disable_kiosk_mode},
          {MENU_ENUM_LABEL_XMB_MAIN_MENU_ENABLE_SETTINGS,       action_ok_enable_settings},

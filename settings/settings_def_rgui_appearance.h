@@ -105,3 +105,12 @@ S_BOOL(menu_xmb_shadows_enable, XMB_SHADOWS_ENABLE,
       "Draw drop shadows for icons, thumbnails and letters. This will have a minor performance hit.")
 #endif
 #endif
+#if defined(HAVE_XMB) || defined(SETTINGS_DEF_STRINGS_PASS)
+#if !defined(SETTINGS_DEF_CONFIG_PASS) || (defined(HAVE_MENU))
+S_BOOL(menu_xmb_disc_spin, XMB_DISC_SPIN,
+      "xmb_disc_spin",
+      DEFAULT_XMB_DISC_SPIN, SD_FLAG_NONE, 0, 0,
+      "Disc Spin-Up Animation",
+      "When a game from a disc system starts from its Run entry, spin its disc up like a console drive while it loads. Needs Playlist Icons set to Title Screen, with disc images as title images.")
+#endif
+#endif

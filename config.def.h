@@ -1001,6 +1001,8 @@
 #else
 #define DEFAULT_XMB_SHADOWS_ENABLE true
 #endif
+/* Run spins a disc system's game disc up before it starts */
+#define DEFAULT_XMB_DISC_SPIN true
 #endif
 
 #define DEFAULT_MENU_FRAMEBUFFER_OPACITY 0.900f

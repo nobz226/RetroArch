@@ -42,6 +42,7 @@
 #include "../../frontend/frontend_driver.h"
 
 #include "../menu_driver.h"
+#include "../menu_disc_spin.h"
 #include "../menu_str.h"
 #include "../menu_entries.h"
 #include "../menu_screensaver.h"
@@ -1112,6 +1113,158 @@ static void *xmb_list_get_entry(void *data,
    }
 
    return NULL;
+}
+
+/* A disc icon turning in place. The outline stays put and the texture
+ * coordinates turn about the disc's own centre, so the disc rotates
+ * without the stretching a matrix rotation gives on a non-square
+ * viewport. Only the disc is drawn - the box @u0,@v0 - @u1,@v1 of the
+ * picture (0..1 from the top left), as a round outline: outside it a
+ * square's corners would sample past the picture, where the edge pixels
+ * repeat into streaks, a disc off the picture's centre would wobble, and
+ * a slightly oval scan would turn its outline. The disc turns as if
+ * round. @angle is counter-clockwise, in radians. */
+#define XMB_DISC_SEGMENTS 64
+static void xmb_draw_spinning_icon(
+      void *userdata,
+      gfx_display_t *p_disp,
+      gfx_display_ctx_driver_t *dispctx,
+      unsigned video_width,
+      unsigned video_height,
+      uintptr_t texture,
+      float x, float y, float w, float h,
+      float u0, float v0, float u1, float v1,
+      uintptr_t disc_texture,
+      float angle)
+{
+   unsigned i, n;
+   gfx_display_ctx_draw_t draw;
+   struct video_coords coords;
+   math_matrix_4x4 mymat;
+   /* Strip around a fan: rim, centre, rim, centre... back to the start */
+   float vertex[(XMB_DISC_SEGMENTS * 2 + 1) * 2];
+   float tex_coord[(XMB_DISC_SEGMENTS * 2 + 1) * 2];
+   float color[(XMB_DISC_SEGMENTS * 2 + 1) * 4];
+   const float *def_tex = NULL;
+   const float *def_ver = NULL;
+   float c              = cosf(angle);
+   float s              = sinf(angle);
+   float tcu, tcv, tru, trv, det;
+   float scu, scv, sru, srv;   /* the same disc where it is sampled */
+   float a00, a01, a10, a11;   /* texture coordinates per vertex unit */
+
+   if (!dispctx || !texture || w < 1.0f || h < 1.0f)
+      return;
+   if (dispctx->get_default_tex_coords)
+      def_tex = dispctx->get_default_tex_coords();
+   if (dispctx->get_default_vertices)
+      def_ver = dispctx->get_default_vertices();
+   if (!def_tex || !def_ver)
+      return;
+
+   /* The driver's own quad: its default texture coordinates spread over
+    * its default vertices (0,0) (1,0) (0,1) (1,1), i.e.
+    * tex = def_tex[0..1] + A * vertex. Inverted to place a picture point. */
+   a00 = def_tex[2] - def_tex[0];
+   a10 = def_tex[3] - def_tex[1];
+   a01 = def_tex[4] - def_tex[0];
+   a11 = def_tex[5] - def_tex[1];
+   det = a00 * a11 - a01 * a10;
+   if (det == 0.0f)
+      return;
+
+   /* The disc in texture space (the picture: u across, v down). The
+    * disc's own texture is just that box, so it samples all of it. */
+   tcu = (u0 + u1) * 0.5f;
+   tcv = (v0 + v1) * 0.5f;
+   tru = (u1 - u0) * 0.5f;
+   trv = (v1 - v0) * 0.5f;
+   if (disc_texture)
+   {
+      scu = scv = sru = srv = 0.5f;
+      texture = disc_texture;
+   }
+   else
+   {
+      scu = tcu; scv = tcv; sru = tru; srv = trv;
+   }
+
+#define XMB_DISC_PUT(tu_, tv_, su_, sv_) \
+   do { \
+      float du_ = (tu_) - def_tex[0], dv_ = (tv_) - def_tex[1]; \
+      float vx_ = ( a11 * du_ - a01 * dv_) / det; \
+      float vy_ = (-a10 * du_ + a00 * dv_) / det; \
+      vertex[n * 2]        = def_ver[0] + vx_ * (def_ver[2] - def_ver[0]) \
+                                        + vy_ * (def_ver[4] - def_ver[0]); \
+      vertex[n * 2 + 1]    = def_ver[1] + vx_ * (def_ver[3] - def_ver[1]) \
+                                        + vy_ * (def_ver[5] - def_ver[1]); \
+      tex_coord[n * 2]     = (su_); \
+      tex_coord[n * 2 + 1] = (sv_); \
+      color[n * 4]         = 1.0f; \
+      color[n * 4 + 1]     = 1.0f; \
+      color[n * 4 + 2]     = 1.0f; \
+      color[n * 4 + 3]     = 1.0f; \
+      n++; \
+   } while (0)
+
+   n = 0;
+   if (dispctx->handles_vertex_strip)
+   {
+      for (i = 0; i <= XMB_DISC_SEGMENTS; i++)
+      {
+         float a  = (2.0f * (float)M_PI * (float)i) / (float)XMB_DISC_SEGMENTS;
+         float ux = cosf(a);
+         float uy = sinf(a);
+         /* Image coordinates run down the screen, so a counter-clockwise
+          * turn on screen samples through the opposite rotation, worked in
+          * the disc's round space and stretched back to its box */
+         float rx = c * ux - s * uy;
+         float ry = s * ux + c * uy;
+         XMB_DISC_PUT(tcu + tru * ux, tcv + trv * uy,
+               scu + sru * rx, scv + srv * ry);
+         /* The last rim point closes the circle; no centre after it */
+         if (i < XMB_DISC_SEGMENTS)
+            XMB_DISC_PUT(tcu, tcv, scu, scv);
+      }
+   }
+   else
+   {
+      /* A driver that only takes quads gets the disc's square */
+      for (i = 0; i < 4; i++)
+      {
+         /* Match the default quad's vertex order through its tex coords */
+         float ux = (def_tex[i * 2]     - 0.5f) * 2.0f;
+         float uy = (def_tex[i * 2 + 1] - 0.5f) * 2.0f;
+         float rx = c * ux - s * uy;
+         float ry = s * ux + c * uy;
+         XMB_DISC_PUT(tcu + tru * ux, tcv + trv * uy,
+               scu + sru * rx, scv + srv * ry);
+      }
+   }
+#undef XMB_DISC_PUT
+
+   gfx_display_blend_begin(dispctx, userdata);
+   if (!dispctx->handles_transform)
+      gfx_display_rotate_z(p_disp, &mymat, 1.0f, 0.0f, userdata);
+
+   coords.vertices      = n;
+   coords.vertex        = vertex;
+   coords.tex_coord     = tex_coord;
+   coords.lut_tex_coord = NULL;
+   coords.color         = color;
+
+   draw.scale_factor    = 1.0f;
+   draw.rotation        = 0.0f;
+   draw.coords          = &coords;
+   draw.matrix_data     = &mymat;
+   draw.texture         = texture;
+   draw.pipeline_id     = 0;
+   draw.dims            = VIDEO_SCALE_PACK((unsigned)(w + 0.5f), (unsigned)(h + 0.5f));
+   draw.pos             = VIDEO_POS_PACK(VIDEO_PX(x),
+         VIDEO_PX((float)video_height - y - h));
+   gfx_display_draw(dispctx, &draw, userdata,
+         VIDEO_SCALE_PACK(video_width, video_height));
+   gfx_display_blend_end(dispctx, userdata);
 }
 
 static void xmb_draw_icon(
@@ -4467,6 +4620,8 @@ static uintptr_t xmb_icon_get_id(xmb_handle_t *xmb,
          break;
       case MENU_ENUM_LABEL_RENAME_ENTRY:
          return xmb->textures.list[XMB_TEXTURE_RENAME];
+      case MENU_ENUM_LABEL_GAME_MANUAL:
+         return xmb->textures.list[XMB_TEXTURE_HELP];
       case MENU_ENUM_LABEL_RESUME_CONTENT:
       case MENU_ENUM_LABEL_QUICK_MENU_SHOW_RESUME_CONTENT:
          return xmb->textures.list[XMB_TEXTURE_RESUME];
@@ -9610,6 +9765,9 @@ static void xmb_frame(void *data, video_frame_info_t *video_info)
          &xmb_item_color[0],
          &mymat);
 
+   /* Reported again below while the Run menu shows a game's icon */
+   menu_disc_spin_clear_icon();
+
    /* Show icon thumbnail instead if enabled */
    if (     (xmb->is_quick_menu || xmb->is_playlist)
          && video_info->menu.icon_thumbnails)
@@ -9659,17 +9817,45 @@ static void xmb_frame(void *data, video_frame_info_t *video_info)
          else if (gfx_icon_x > gfx_icon_x_margin + playlist_extra_x)
             gfx_icon_x = gfx_icon_x_margin + playlist_extra_x;
 
-         gfx_thumbnail_draw(
-               userdata,
-               VIDEO_SCALE_PACK(video_width, video_height),
-               icon_thumbnail,
-               gfx_icon_x,
-               gfx_icon_y,
-               VIDEO_SCALE_PACK(gfx_icon_width, gfx_icon_height),
-               GFX_THUMBNAIL_ALIGN_CENTRE,
-               1.0f,
-               1.0f,
-               &thumbnail_shadow);
+         /* The game's Run menu: tell the disc spin-up where this icon
+          * is, and draw it turning while it spins */
+         if (     xmb->is_quick_menu
+               && icon_thumbnail->status == GFX_THUMBNAIL_STATUS_AVAILABLE
+               && menu_st->thumbnail_path_data
+               && *menu_st->thumbnail_path_data->icon_path)
+         {
+            float draw_x = gfx_icon_x + (gfx_icon_width  - gfx_icon_width_draw)  / 2.0f;
+            float draw_y = gfx_icon_y + (gfx_icon_height - gfx_icon_height_draw) / 2.0f;
+            menu_disc_spin_set_icon(menu_st->thumbnail_path_data->icon_path,
+                  draw_x, draw_y, gfx_icon_width_draw, gfx_icon_height_draw,
+                  video_width, video_height);
+            if (menu_disc_spin_active())
+            {
+               float u0, v0, u1, v1;
+               uintptr_t disc = menu_disc_spin_texture();
+               menu_disc_spin_disc_box(&u0, &v0, &u1, &v1);
+               if (!menu_disc_spin_handed_over())
+                  xmb_draw_spinning_icon(userdata, p_disp, dispctx,
+                        video_width, video_height, icon_thumbnail->texture,
+                        draw_x, draw_y, gfx_icon_width_draw, gfx_icon_height_draw,
+                        u0, v0, u1, v1, disc,
+                        menu_disc_spin_angle(cpu_features_get_time_usec()));
+               icon_thumbnail = NULL;
+            }
+         }
+
+         if (icon_thumbnail)
+            gfx_thumbnail_draw(
+                  userdata,
+                  VIDEO_SCALE_PACK(video_width, video_height),
+                  icon_thumbnail,
+                  gfx_icon_x,
+                  gfx_icon_y,
+                  VIDEO_SCALE_PACK(gfx_icon_width, gfx_icon_height),
+                  GFX_THUMBNAIL_ALIGN_CENTRE,
+                  1.0f,
+                  1.0f,
+                  &thumbnail_shadow);
       }
    }
 
