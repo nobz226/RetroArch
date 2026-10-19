@@ -420,6 +420,109 @@ int nobz_pace_frames          = 0;
 int nobz_pace_dupes           = 0;
 unsigned nobz_pace_occ        = 0;
 bool nobz_pace_ok             = false;
+#ifdef __APPLE__
+#include <mach/mach.h>
+#include <pthread.h>
+#include <dlfcn.h>
+#include <time.h>
+/* TEST ONLY: when a frame runs past 60 ms, dump every thread's stack */
+static volatile int64_t nobz_wd_t0 = 0;
+static FILE *nobz_wd_fp = NULL;
+static int64_t nobz_wd_now(void)
+{
+   struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+   return (int64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
+}
+static int nobz_wd_read(uint64_t addr, uint64_t *out)
+{
+   mach_vm_size_t got = 0;
+   if (!addr || (addr & 7))
+      return 0;
+   return vm_read_overwrite(mach_task_self(), (vm_address_t)addr, 8,
+         (vm_address_t)out, (vm_size_t*)&got) == KERN_SUCCESS && got == 8;
+}
+static void nobz_wd_dump(int64_t now, int64_t t0)
+{
+   thread_act_array_t th; mach_msg_type_number_t n, i, k;
+   thread_t self = mach_thread_self();
+   uint64_t pcs[64][40]; int cnt[64]; char names[64][64];
+   if (task_threads(mach_task_self(), &th, &n) != KERN_SUCCESS)
+      return;
+   if (n > 64) n = 64;
+   for (i = 0; i < n; i++)
+   {
+      arm_thread_state64_t st; mach_msg_type_number_t sc = ARM_THREAD_STATE64_COUNT;
+      uint64_t fp; pthread_t pt;
+      cnt[i] = 0; names[i][0] = 0;
+      if (th[i] == self) continue;
+      pt = pthread_from_mach_thread_np(th[i]);
+      if (pt) pthread_getname_np(pt, names[i], sizeof(names[i]));
+      if (thread_suspend(th[i]) != KERN_SUCCESS) continue;
+      if (thread_get_state(th[i], ARM_THREAD_STATE64, (thread_state_t)&st, &sc) == KERN_SUCCESS)
+      {
+         pcs[i][cnt[i]++] = arm_thread_state64_get_pc(st);
+         pcs[i][cnt[i]++] = arm_thread_state64_get_lr(st);
+         fp = arm_thread_state64_get_fp(st);
+         while (cnt[i] < 40)
+         {
+            uint64_t nfp, ret;
+            if (!nobz_wd_read(fp, &nfp) || !nobz_wd_read(fp + 8, &ret) || !ret)
+               break;
+            pcs[i][cnt[i]++] = ret;
+            if (nfp <= fp) break;
+            fp = nfp;
+         }
+      }
+      thread_resume(th[i]);
+   }
+   fprintf(nobz_wd_fp, "=== %lld frame running %lld us\n", (long long)now, (long long)(now - t0));
+   for (i = 0; i < n; i++)
+   {
+      if (!cnt[i]) continue;
+      fprintf(nobz_wd_fp, "-- thread %u '%s'\n", i, names[i]);
+      for (k = 0; k < (unsigned)cnt[i]; k++)
+      {
+         Dl_info di; uint64_t pc = pcs[i][k] & 0x0000FFFFFFFFFFFFull;
+         if (dladdr((void*)pc, &di) && di.dli_sname)
+            fprintf(nobz_wd_fp, "   %s+%llu (%s)\n", di.dli_sname,
+                  (unsigned long long)(pc - (uint64_t)di.dli_saddr),
+                  di.dli_fname ? strrchr(di.dli_fname, '/') + 1 : "");
+         else
+            fprintf(nobz_wd_fp, "   0x%llx (%s)\n", (unsigned long long)pc,
+                  (dladdr((void*)pc, &di) && di.dli_fname) ? strrchr(di.dli_fname, '/') + 1 : "?");
+      }
+   }
+   fflush(nobz_wd_fp);
+   for (i = 0; i < n; i++)
+      mach_port_deallocate(mach_task_self(), th[i]);
+   vm_deallocate(mach_task_self(), (vm_address_t)th, n * sizeof(thread_t));
+   mach_port_deallocate(mach_task_self(), self);
+}
+static void *nobz_wd_thread(void *arg)
+{
+   int64_t dumped = 0;
+   (void)arg;
+   for (;;)
+   {
+      int64_t t0 = nobz_wd_t0, now = nobz_wd_now();
+      if (t0 && t0 != dumped && now - t0 > 60000 && now - t0 < 400000)
+      {
+         dumped = t0;
+         nobz_wd_dump(now, t0);
+      }
+      usleep(5000);
+   }
+   return NULL;
+}
+static void nobz_wd_start(const char *path)
+{
+   char p[1024]; pthread_t t;
+   snprintf(p, sizeof(p), "%s.stacks", path);
+   if (!(nobz_wd_fp = fopen(p, "w")))
+      return;
+   pthread_create(&t, NULL, nobz_wd_thread, NULL);
+}
+#endif
 static runloop_state_t runloop_state      = {0};
 
 /* Defined here, before its first user: the SET_MESSAGE_EXT STATUS
@@ -8628,9 +8731,17 @@ int runloop_iterate(void)
             const char *pf  = getenv("RA_PACE_LOG");
             nobz_pace_inited = 1;
             if (pf && *pf)
+            {
                nobz_pace_fp = fopen(pf, "w");
+#ifdef __APPLE__
+               nobz_wd_start(pf);
+#endif
+            }
          }
          t0 = cpu_features_get_time_usec();
+#ifdef __APPLE__
+         nobz_wd_t0 = t0;
+#endif
          nobz_pace_present_us = 0;
          nobz_pace_frames = nobz_pace_dupes = 0;
          core_run();
