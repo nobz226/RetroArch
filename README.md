@@ -2,6 +2,14 @@
 
 # RetroArch
 
+> **About this fork (nobz226/RetroArch).** The RetroArch app of the [MacOS-ARM-Nobz Edition](https://github.com/nobz226/retroarch-macos-arm-nobz), a ready-to-play setup for Apple Silicon Macs. Built by the **CI macOS** workflow (the fork's only active one). On top of upstream RetroArch it adds:
+> - a first-launch setup that installs the bundled setup, with a permissions page, and an **Update Nobz Setup** updater;
+> - user profiles (each with its own saves, settings and RetroAchievements account), a **Who's playing?** window and a kiosk password;
+> - **Translate Screen** in the Quick Menu (ZTranslate or VGTranslate);
+> - a **game manual viewer** (PDFs from `thumbnails/<system>/Named_Manuals`, opened from a game's Run list or the Quick Menu) and a **disc spin-up animation** when a disc game starts;
+> - the **Nobz** icon theme, finding the games folder on any drive name, and refreshing playlists at launch;
+> - Vulkan (MoltenVK) crash and freeze fixes.
+
 RetroArch is the reference frontend for the libretro API.
 Popular examples of implementations for this API includes video game system emulators and game engines as well as
 more generalized 3D programs.
