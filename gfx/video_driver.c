@@ -14,7 +14,6 @@
  *  If not, see <http://www.gnu.org/licenses/>.
  */
 
-extern bool nobz_pace_ok; /* TEST ONLY */
 #include <memory/mem_stats.h>
 #include <stdlib.h>
 #include <math.h>
@@ -37,6 +36,7 @@ extern bool nobz_pace_ok; /* TEST ONLY */
 #include "../config.def.h"
 
 #include "video_driver.h"
+extern bool nobz_pace_ok; /* TEST ONLY */
 #include "gfx_instrument.h"
 
 /* Decided here, at the top, because an #ifdef on a macro defined
