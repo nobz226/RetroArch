@@ -42,6 +42,8 @@
 #define MANUAL_CACHE_SLOTS   3
 #define MANUAL_MAX_TEX_DIM   8192
 #define MANUAL_PAGES_FILE    "manual_pages.cfg"
+/* The page gets the screen above a strip kept for the caption */
+#define MANUAL_PAGE_AREA     0.94f
 
 enum manual_zoom
 {
@@ -81,7 +83,8 @@ static struct
    unsigned doc;
    unsigned page;
    unsigned zoom;
-   unsigned vw, vh;      /* video size the pages are drawn for */
+   unsigned vw, vh;      /* area the pages are drawn for: the screen
+                          * above the caption strip */
    unsigned generation;  /* bumped on close: late renders are dropped */
    float scroll;         /* 0 top .. 1 bottom, MANUAL_ZOOM_WIDTH */
    bool active;
@@ -665,12 +668,15 @@ void menu_manual_frame(video_frame_info_t *video_info)
    if (!dispctx || video_width < 1 || video_height < 1)
       return;
 
-   /* The screen size the pages are drawn for */
-   if (video_width != manual_st.vw || video_height != manual_st.vh)
+   /* The area the pages are drawn for */
    {
-      manual_free_slots(true);
-      manual_st.vw = video_width;
-      manual_st.vh = video_height;
+      unsigned area_h = (unsigned)((float)video_height * MANUAL_PAGE_AREA);
+      if (video_width != manual_st.vw || area_h != manual_st.vh)
+      {
+         manual_free_slots(true);
+         manual_st.vw = video_width;
+         manual_st.vh = area_h;
+      }
    }
    if (!(slot = manual_find_slot(manual_st.doc, manual_st.page)))
       manual_request(manual_st.page);
@@ -682,8 +688,9 @@ void menu_manual_frame(video_frame_info_t *video_info)
 
    if (slot)
    {
-      float w = (float)slot->w;
-      float h = (float)slot->h;
+      float area_h = (float)manual_st.vh;
+      float w      = (float)slot->w;
+      float h      = (float)slot->h;
       float x, y;
       if (manual_st.zoom == MANUAL_ZOOM_WIDTH)
       {
@@ -691,48 +698,64 @@ void menu_manual_frame(video_frame_info_t *video_info)
          h = h * (float)video_width / w;
          w = (float)video_width;
          x = 0.0f;
-         y = (h > (float)video_height)
-            ? -manual_st.scroll * (h - (float)video_height)
-            : ((float)video_height - h) / 2.0f;
+         y = (h > area_h)
+            ? -manual_st.scroll * (h - area_h)
+            : (area_h - h) / 2.0f;
       }
       else
       {
-         float s = MIN((float)video_width / w, (float)video_height / h);
+         float s = MIN((float)video_width / w, area_h / h);
          w *= s;
          h *= s;
-         x  = ((float)video_width  - w) / 2.0f;
-         y  = ((float)video_height - h) / 2.0f;
+         x  = ((float)video_width - w) / 2.0f;
+         y  = (area_h - h) / 2.0f;
       }
       manual_draw_texture(video_info->userdata, p_disp, dispctx,
             video_width, video_height, slot->tex, x, y, w, h);
    }
 
+   /* The caption strip, over a scrolled page's lower edge */
+   {
+      float band[16] = {
+         0.0f, 0.0f, 0.0f, 1.0f,
+         0.0f, 0.0f, 0.0f, 1.0f,
+         0.0f, 0.0f, 0.0f, 1.0f,
+         0.0f, 0.0f, 0.0f, 1.0f
+      };
+      unsigned band_y = manual_st.vh;
+      if (band_y < video_height)
+         gfx_display_draw_quad(p_disp, video_info->userdata,
+               VIDEO_SCALE_PACK(video_width, video_height),
+               0, (int)band_y,
+               VIDEO_SCALE_PACK(video_width, video_height - band_y),
+               VIDEO_SCALE_PACK(video_width, video_height), band, NULL);
+   }
+
    gfx_display_flush_batch(p_disp);
 
-   /* Where we are, and the controls */
-   if (manual_st.doc_count > 1)
+   /* Where we are, and the controls. "Back" rather than a button
+    * name: menus can swap OK and Back. */
    {
-      const char *name = path_basename(manual_st.docs[manual_st.doc]);
+      const char *name = (manual_st.doc_count > 1)
+         ? path_basename(manual_st.docs[manual_st.doc]) : manual_st.title;
+      const char *updown = (manual_st.zoom == MANUAL_ZOOM_WIDTH)
+         ? "   Up/Down: scroll"
+         : (manual_st.doc_count > 1 ? "   Up/Down: other manuals" : "");
       len = snprintf(msg, sizeof(msg),
-            "%s  -  page %u / %u%s   |   Left/Right: page   L/R: 5 pages   Y: zoom   Up/Down: %s   B: close",
-            name ? name : manual_st.title,
+            "%s  -  page %u of %u%s      Left/Right: page   L/R: 5 pages   Y: zoom%s   Back: close",
+            name ? name : "",
             manual_st.page + 1, manual_st.page_counts[manual_st.doc],
-            slot ? "" : "  (loading)",
-            manual_st.zoom == MANUAL_ZOOM_WIDTH ? "scroll" : "other manuals");
+            slot ? "" : "  (loading)", updown);
    }
-   else
-      len = snprintf(msg, sizeof(msg),
-            "%s  -  page %u / %u%s   |   Left/Right: page   L/R: 5 pages   Y: zoom%s   B: close",
-            manual_st.title,
-            manual_st.page + 1, manual_st.page_counts[manual_st.doc],
-            slot ? "" : "  (loading)",
-            manual_st.zoom == MANUAL_ZOOM_WIDTH ? "   Up/Down: scroll" : "");
-   if (len >= sizeof(msg))
-      len = sizeof(msg) - 1;
-
    params.x           = 0.01f;
-   params.y           = 0.012f;
-   params.scale       = 0.85f;
+   params.y           = 0.015f;
+   /* As large as fits across the screen, up to the OSD's own size */
+   params.scale       = 0.8f;
+   {
+      int text_w = font_driver_get_message_width(NULL, msg, len, params.scale);
+      if (text_w > 0 && (float)text_w > (float)video_width * 0.98f)
+         params.scale *= ((float)video_width * 0.98f) / (float)text_w;
+   }
    params.text_align  = TEXT_ALIGN_LEFT;
    params.full_screen = true;
    params.drop_x      = 2;
