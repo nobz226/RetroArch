@@ -2534,6 +2534,18 @@ static ssize_t audio_driver_dev_write(audio_driver_state_t *audio_st,
    retro_time_t t0 = cpu_features_get_time_usec();
    ssize_t w = audio_driver_dev_write_real(audio_st, audio, buf, bytes, wait_room);
    nobz_pace_audio_us += cpu_features_get_time_usec() - t0;
+   {
+      extern uint64_t nobz_pace_dev_bytes;
+      extern double nobz_pace_ratio, nobz_pace_adjust;
+      extern unsigned nobz_pace_avail, nobz_pace_bufsize;
+      if (w > 0)
+         nobz_pace_dev_bytes += (uint64_t)w;
+      nobz_pace_ratio   = audio_st->src_ratio_orig;
+      nobz_pace_adjust  = audio_st->cached_rate_adjust;
+      nobz_pace_bufsize = (unsigned)audio_st->buffer_size;
+      nobz_pace_avail   = audio_st->context_audio_data
+         ? (unsigned)audio->write_avail(audio_st->context_audio_data) : 0;
+   }
    nobz_pace_audio_writes++;
    return w;
 }
