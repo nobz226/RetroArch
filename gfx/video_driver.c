@@ -7054,7 +7054,15 @@ void video_driver_frame(const void *data, unsigned width,
       else if (widgets_active && p_dispwidget->worker)
          gfx_widgets_status_text_to_frame(&video_info, status_text);
 #endif
-      if (vid->frame(
+      {
+      extern retro_time_t nobz_pace_present_us;
+      extern int nobz_pace_frames, nobz_pace_dupes;
+      retro_time_t nobz_t0 = cpu_features_get_time_usec();
+      bool nobz_ok;
+      nobz_pace_frames++;
+      if (!data)
+         nobz_pace_dupes++;
+      nobz_ok = vid->frame(
                video_st->data, data, width, height,
                video_st->frame_count, (unsigned)pitch,
 #if HAVE_MENU
@@ -7065,7 +7073,10 @@ void video_driver_frame(const void *data, unsigned width,
 #endif
                ? ""
                : video_driver_msg,
-               &video_info))
+               &video_info);
+      nobz_pace_present_us += cpu_features_get_time_usec() - nobz_t0;
+      }
+      if (nobz_ok)
          video_st->main_flags |=  VIDEO_FLAG_ACTIVE;
       else
          video_st->main_flags &= ~VIDEO_FLAG_ACTIVE;

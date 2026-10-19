@@ -412,6 +412,13 @@ static void runloop_game_ai_think_cb(void *userdata,
 #define PERF_LOG_FMT "[PERF] Avg (%s): %llu ticks, %llu runs.\n"
 #endif
 
+/* TEST ONLY: frame pacing log (RA_PACE_LOG=<file>) */
+FILE *nobz_pace_fp            = NULL;
+int nobz_pace_inited          = 0;
+retro_time_t nobz_pace_present_us = 0;
+int nobz_pace_frames          = 0;
+int nobz_pace_dupes           = 0;
+unsigned nobz_pace_occ        = 0;
 static runloop_state_t runloop_state      = {0};
 
 /* Defined here, before its first user: the SET_MESSAGE_EXT STATUS
@@ -8415,6 +8422,7 @@ int runloop_iterate(void)
          audio_buf_active    = true;
       }
 
+      nobz_pace_occ = audio_buf_occupancy;
       if (!core_paused)
          runloop_st->audio_buffer_status.callback(
                audio_buf_active, audio_buf_occupancy, audio_buf_underrun);
@@ -8610,7 +8618,32 @@ int runloop_iterate(void)
          preempt_run(runloop_st->preempt_data, runloop_st);
       else
 #endif
+      {
+         /* TEST ONLY: one line per core frame */
+         static retro_time_t last;
+         retro_time_t t0, t1;
+         if (!nobz_pace_inited)
+         {
+            const char *pf  = getenv("RA_PACE_LOG");
+            nobz_pace_inited = 1;
+            if (pf && *pf)
+               nobz_pace_fp = fopen(pf, "w");
+         }
+         t0 = cpu_features_get_time_usec();
+         nobz_pace_present_us = 0;
+         nobz_pace_frames = nobz_pace_dupes = 0;
          core_run();
+         t1 = cpu_features_get_time_usec();
+         if (nobz_pace_fp)
+         {
+            fprintf(nobz_pace_fp, "%lld %lld %lld %lld %d %d %u\n",
+                  (long long)t0, (long long)(last ? t0 - last : 0),
+                  (long long)(t1 - t0), (long long)nobz_pace_present_us,
+                  nobz_pace_frames, nobz_pace_dupes, nobz_pace_occ);
+            fflush(nobz_pace_fp);
+         }
+         last = t0;
+      }
    }
 
 #ifdef HAVE_MENU
