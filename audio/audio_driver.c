@@ -2522,7 +2522,22 @@ static void audio_driver_extra_merge_s16(audio_driver_state_t *audio_st,
  * path means to lose that; the pitch-preserving stream is continuous, and
  * its first output after a press meets the ring the 1x blocking writes
  * left full. Wait for the room instead: the ring frees it within a period. */
+extern retro_time_t nobz_pace_audio_us; /* TEST ONLY */
+extern int nobz_pace_audio_writes;
+static ssize_t audio_driver_dev_write_real(audio_driver_state_t *audio_st,
+      const audio_driver_t *audio, const void *buf, size_t bytes,
+      bool wait_room);
 static ssize_t audio_driver_dev_write(audio_driver_state_t *audio_st,
+      const audio_driver_t *audio, const void *buf, size_t bytes,
+      bool wait_room)
+{
+   retro_time_t t0 = cpu_features_get_time_usec();
+   ssize_t w = audio_driver_dev_write_real(audio_st, audio, buf, bytes, wait_room);
+   nobz_pace_audio_us += cpu_features_get_time_usec() - t0;
+   nobz_pace_audio_writes++;
+   return w;
+}
+static ssize_t audio_driver_dev_write_real(audio_driver_state_t *audio_st,
       const audio_driver_t *audio, const void *buf, size_t bytes,
       bool wait_room)
 {
@@ -5659,7 +5674,12 @@ static void audio_driver_pipeline_retry(audio_driver_state_t *audio_st)
       if (!ready) return;
       if (bytes > ready) bytes = ready;
       audio_driver_state_lock();
-      written = audio->write(audio_st->context_audio_data, audio_st->pipe_pending, bytes);
+      {
+         retro_time_t nt0 = cpu_features_get_time_usec();
+         written = audio->write(audio_st->context_audio_data, audio_st->pipe_pending, bytes);
+         nobz_pace_audio_us += cpu_features_get_time_usec() - nt0;
+         nobz_pace_audio_writes++;
+      }
       if (written > 0 && (size_t)written <= bytes)
       {
          size_t fb = audio_driver_dev_frame_bytes(audio_st);

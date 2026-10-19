@@ -420,6 +420,8 @@ int nobz_pace_frames          = 0;
 int nobz_pace_dupes           = 0;
 unsigned nobz_pace_occ        = 0;
 bool nobz_pace_ok             = false;
+retro_time_t nobz_pace_audio_us = 0;
+int nobz_pace_audio_writes    = 0;
 #ifdef __APPLE__
 #include <mach/mach.h>
 #include <pthread.h>
@@ -8744,14 +8746,17 @@ int runloop_iterate(void)
 #endif
          nobz_pace_present_us = 0;
          nobz_pace_frames = nobz_pace_dupes = 0;
+         nobz_pace_audio_us = 0;
+         nobz_pace_audio_writes = 0;
          core_run();
          t1 = cpu_features_get_time_usec();
          if (nobz_pace_fp)
          {
-            fprintf(nobz_pace_fp, "%lld %lld %lld %lld %d %d %u\n",
+            fprintf(nobz_pace_fp, "%lld %lld %lld %lld %d %d %u %lld %d\n",
                   (long long)t0, (long long)(last ? t0 - last : 0),
                   (long long)(t1 - t0), (long long)nobz_pace_present_us,
-                  nobz_pace_frames, nobz_pace_dupes, nobz_pace_occ);
+                  nobz_pace_frames, nobz_pace_dupes, nobz_pace_occ,
+                  (long long)nobz_pace_audio_us, nobz_pace_audio_writes);
             fflush(nobz_pace_fp);
          }
          last = t0;
