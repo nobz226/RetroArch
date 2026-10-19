@@ -419,6 +419,7 @@ retro_time_t nobz_pace_present_us = 0;
 int nobz_pace_frames          = 0;
 int nobz_pace_dupes           = 0;
 unsigned nobz_pace_occ        = 0;
+bool nobz_pace_ok             = false;
 static runloop_state_t runloop_state      = {0};
 
 /* Defined here, before its first user: the SET_MESSAGE_EXT STATUS

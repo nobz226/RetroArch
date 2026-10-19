@@ -7057,12 +7057,12 @@ void video_driver_frame(const void *data, unsigned width,
       {
       extern retro_time_t nobz_pace_present_us;
       extern int nobz_pace_frames, nobz_pace_dupes;
+      extern bool nobz_pace_ok;
       retro_time_t nobz_t0 = cpu_features_get_time_usec();
-      bool nobz_ok;
       nobz_pace_frames++;
       if (!data)
          nobz_pace_dupes++;
-      nobz_ok = vid->frame(
+      nobz_pace_ok = vid->frame(
                video_st->data, data, width, height,
                video_st->frame_count, (unsigned)pitch,
 #if HAVE_MENU
@@ -7076,7 +7076,7 @@ void video_driver_frame(const void *data, unsigned width,
                &video_info);
       nobz_pace_present_us += cpu_features_get_time_usec() - nobz_t0;
       }
-      if (nobz_ok)
+      if (nobz_pace_ok)
          video_st->main_flags |=  VIDEO_FLAG_ACTIVE;
       else
          video_st->main_flags &= ~VIDEO_FLAG_ACTIVE;
