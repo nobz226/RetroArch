@@ -170,13 +170,35 @@ static bool disc_spin_dir_is_disc_system(const char *dir)
    return slot->disc;
 }
 
-/* The disc's box in its picture: everything that isn't see-through.
- * The threshold is low so a disc's faint clear rim counts too. */
+/* The disc's box in its picture. Scans carry the odd stray line of
+ * pixels outside the disc, which a plain bounding box would take in, so:
+ * the disc's centre is the centre of its solid pixels (a stray line is
+ * too light to move it), and each edge is where, walking in from the
+ * picture's border along the lines through that centre, at least four
+ * pixels in a row are not see-through (a stray line is one or two
+ * thick). The threshold is low so a disc's faint clear rim counts. */
+#define DISC_SPIN_SOLID   40
+#define DISC_SPIN_VISIBLE 8
+#define DISC_SPIN_RUN     4
+static int disc_spin_walk(const uint32_t *px, int count, int step)
+{
+   int i, run = 0;
+   for (i = 0; i < count; i++)
+   {
+      if ((px[(size_t)i * step] >> 24) > DISC_SPIN_VISIBLE)
+      {
+         if (++run >= DISC_SPIN_RUN)
+            return i - (DISC_SPIN_RUN - 1);
+      }
+      else
+         run = 0;
+   }
+   return -1;
+}
+
 static void disc_spin_find_disc(const char *path)
 {
    struct texture_image img;
-   unsigned x, y;
-   unsigned x0 = 0xffffffffu, y0 = 0xffffffffu, x1 = 0, y1 = 0;
 
    /* Whole picture, just inside its edge, if it can't be read */
    disc_spin_st.disc_u0 = 0.005f;
@@ -188,29 +210,45 @@ static void disc_spin_find_disc(const char *path)
    img.supports_rgba = true;
    if (!image_texture_load(&img, path))
       return;
-   if (img.pixels && img.width > 8 && img.height > 8)
+   if (img.pixels && img.width > 16 && img.height > 16)
    {
-      for (y = 0; y < img.height; y++)
+      /* The alpha byte is the high byte of the word in either order */
+      int w = (int)img.width, h = (int)img.height;
+      uint64_t sx = 0, sy = 0, n = 0;
+      int x, y;
+      for (y = 0; y < h; y++)
       {
-         const uint32_t *row = img.pixels + (size_t)y * img.width;
-         for (x = 0; x < img.width; x++)
-         {
-            /* The alpha byte is the high byte of the word in either order */
-            if ((row[x] >> 24) > 8)
+         const uint32_t *row = img.pixels + (size_t)y * w;
+         for (x = 0; x < w; x++)
+            if ((row[x] >> 24) > DISC_SPIN_SOLID)
             {
-               if (x < x0) x0 = x;
-               if (x > x1) x1 = x;
-               if (y < y0) y0 = y;
-               if (y > y1) y1 = y;
+               sx += x;
+               sy += y;
+               n++;
+            }
+      }
+      if (n > 0)
+      {
+         int cx = (int)(sx / n), cy = (int)(sy / n);
+         const uint32_t *row = img.pixels + (size_t)cy * w;
+         const uint32_t *col = img.pixels + cx;
+         int l = disc_spin_walk(row, w, 1);
+         int r = disc_spin_walk(row + (w - 1), w, -1);
+         int t = disc_spin_walk(col, h, w);
+         int b = disc_spin_walk(col + (size_t)(h - 1) * w, h, -w);
+         if (l >= 0 && r >= 0 && t >= 0 && b >= 0)
+         {
+            int x0 = l, x1 = w - r, y0 = t, y1 = h - b;
+            /* A disc, not a sliver: most of the picture, around the centre */
+            if (     x1 - x0 > w / 2 && y1 - y0 > h / 2
+                  && x0 < cx && cx < x1 && y0 < cy && cy < y1)
+            {
+               disc_spin_st.disc_u0 = (float)x0 / (float)w;
+               disc_spin_st.disc_v0 = (float)y0 / (float)h;
+               disc_spin_st.disc_u1 = (float)x1 / (float)w;
+               disc_spin_st.disc_v1 = (float)y1 / (float)h;
             }
          }
-      }
-      if (x1 > x0 + 8 && y1 > y0 + 8)
-      {
-         disc_spin_st.disc_u0 = (float)x0 / (float)img.width;
-         disc_spin_st.disc_v0 = (float)y0 / (float)img.height;
-         disc_spin_st.disc_u1 = (float)(x1 + 1) / (float)img.width;
-         disc_spin_st.disc_v1 = (float)(y1 + 1) / (float)img.height;
       }
    }
    image_texture_free(&img);
