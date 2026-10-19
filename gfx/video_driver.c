@@ -14,6 +14,7 @@
  *  If not, see <http://www.gnu.org/licenses/>.
  */
 
+extern bool nobz_pace_ok; /* TEST ONLY */
 #include <memory/mem_stats.h>
 #include <stdlib.h>
 #include <math.h>
@@ -7057,7 +7058,6 @@ void video_driver_frame(const void *data, unsigned width,
       {
       extern retro_time_t nobz_pace_present_us;
       extern int nobz_pace_frames, nobz_pace_dupes;
-      extern bool nobz_pace_ok;
       retro_time_t nobz_t0 = cpu_features_get_time_usec();
       nobz_pace_frames++;
       if (!data)
