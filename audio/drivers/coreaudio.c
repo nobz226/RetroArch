@@ -62,9 +62,6 @@
 #include <mach/task.h>
 #include <dlfcn.h>
 
-/* The longest device pull, in milliseconds; see the IO buffer below */
-#define CA_MAX_PERIOD_MS 5
-
 /* RTLD_DEFAULT is not always visible here. Apple's dlfcn.h defines it
  * only when the full BSD namespace is - __DARWIN_C_FULL - and this
  * file is compiled through griffin as C, where the iOS and tvOS
@@ -1192,20 +1189,9 @@ static void *coreaudio_init(const char *device,
     * and a device whose minimum is 128 was asked for 64 and simply
     * refused, leaving whatever it had. The property is advisory
     * either way, so what was actually taken is read back and logged
-    * rather than assumed.
-    *
-    * And never more than a few milliseconds. A pull close to a video
-    * frame's length beats against the frame a core writes: 705 frames
-    * at 44.1 kHz is 15.99 ms against a 16.68 ms frame, so every 0.39 s
-    * the two line up, the writer finds the ring full and blocks a whole
-    * pull - a frame shown 10 ms late, a hitch on screen. Rate control
-    * cannot see it coming either, since it samples the fill at the
-    * bottom of that swing. Short pulls give the room back in small
-    * pieces, so a writer that does wait waits only that long. */
+    * rather than assumed. */
    {
-      UInt32 quarter   = (UInt32)((latency * (*new_rate)) / 1000 / 4);
-      UInt32 shortest  = (UInt32)((*new_rate) * CA_MAX_PERIOD_MS / 1000);
-      UInt32 period    = quarter < shortest ? quarter : shortest;
+      UInt32 period    = (UInt32)((latency * (*new_rate)) / 1000 / 4);
       UInt32 wanted    = period;
       UInt32 got       = 0;
       UInt32 size      = sizeof(got);
