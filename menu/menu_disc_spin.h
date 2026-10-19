@@ -54,6 +54,11 @@ bool menu_disc_spin_begin(menu_disc_spin_launch_t launch,
 /* True from Run until the content has loaded (or failed to) */
 bool menu_disc_spin_active(void);
 
+/* Where the disc is in its picture while it spins: a box from the
+ * top left, 0..1 of the picture's width and height. The menu draws
+ * that box as a round disc turning about its own centre. */
+void menu_disc_spin_disc_box(float *u0, float *v0, float *u1, float *v1);
+
 /* Current rotation in radians, counter-clockwise */
 float menu_disc_spin_angle(retro_time_t now);
 

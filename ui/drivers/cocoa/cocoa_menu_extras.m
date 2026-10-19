@@ -178,6 +178,7 @@ void cocoa_disc_spin_overlay_hide(void)
 }
 
 void cocoa_disc_spin_overlay_show(const char *image_path,
+      float u0, float v0, float u1, float v1,
       float x, float y, float w, float h,
       unsigned view_w, unsigned view_h,
       float angle, float radians_per_sec)
@@ -206,9 +207,22 @@ void cocoa_disc_spin_overlay_show(const char *image_path,
          [NSString stringWithUTF8String:image_path]];
       if (!ns_image)
          return;
-      image = [ns_image CGImageForProposedRect:NULL context:nil hints:nil];
-      if (image)
-         CGImageRetain(image);
+      CGImageRef whole = [ns_image CGImageForProposedRect:NULL context:nil hints:nil];
+      image            = NULL;
+      if (whole)
+      {
+         /* Just the disc (image space has its origin at the top left) */
+         float iw  = (float)CGImageGetWidth(whole);
+         float ih  = (float)CGImageGetHeight(whole);
+         CGRect cr = CGRectIntegral(CGRectMake(u0 * iw, v0 * ih,
+                  (u1 - u0) * iw, (v1 - v0) * ih));
+         image     = CGImageCreateWithImageInRect(whole, cr);
+         if (!image)
+         {
+            image = whole;
+            CGImageRetain(image);
+         }
+      }
       RARCH_RELEASE(ns_image);
       if (!image)
          return;
@@ -227,7 +241,8 @@ void cocoa_disc_spin_overlay_show(const char *image_path,
    [CATransaction setDisableActions:YES];
    g_disc_spin_layer                 = [[CALayer alloc] init];
    g_disc_spin_layer.contents        = (__bridge id)image;
-   g_disc_spin_layer.contentsGravity = kCAGravityResizeAspect;
+   /* Filled, so a slightly oval scan turns as a round disc */
+   g_disc_spin_layer.contentsGravity = kCAGravityResize;
    g_disc_spin_layer.contentsScale   = view.window
       ? view.window.backingScaleFactor : 1.0;
    g_disc_spin_layer.frame           = CGRectMake(
@@ -237,7 +252,7 @@ void cocoa_disc_spin_overlay_show(const char *image_path,
    g_disc_spin_layer.zPosition       = 1000.0;
    /* Only the round disc turns: a square image's corners would sweep
     * round with it */
-   g_disc_spin_layer.cornerRadius    = 0.495 * MIN(w * sx, h * sy);
+   g_disc_spin_layer.cornerRadius    = 0.5 * MIN(w * sx, h * sy);
    g_disc_spin_layer.masksToBounds   = YES;
    [g_disc_spin_layer setValue:@(dir * angle) forKeyPath:@"transform.rotation.z"];
    [host addSublayer:g_disc_spin_layer];

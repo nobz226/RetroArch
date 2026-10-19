@@ -47,12 +47,14 @@ bool cocoa_pdf_page_size(const char *path, unsigned page,
 uint32_t *cocoa_pdf_render_page(const char *path, unsigned page,
       unsigned width, unsigned height, bool rgba);
 
-/* Puts @image_path over the render view at the given rectangle (in
- * render-view pixels, top-left origin, of a @view_w x @view_h
- * frame), turned to @angle radians (counter-clockwise) and spinning
- * at @radians_per_sec. Committed at once so it keeps animating while
- * the caller blocks. */
+/* Puts the disc - the box @u0,@v0 - @u1,@v1 of @image_path (0..1,
+ * from the top left) - over the render view at the given rectangle (in
+ * render-view pixels, top-left origin, of a @view_w x @view_h frame),
+ * round, turned to @angle radians (counter-clockwise) and spinning at
+ * @radians_per_sec. Committed at once so it keeps animating while the
+ * caller blocks. */
 void cocoa_disc_spin_overlay_show(const char *image_path,
+      float u0, float v0, float u1, float v1,
       float x, float y, float w, float h,
       unsigned view_w, unsigned view_h,
       float angle, float radians_per_sec);

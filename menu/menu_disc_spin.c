@@ -35,8 +35,8 @@
 
 /* The disc spins this long before the launch: from standstill to full
  * speed over DISC_SPIN_ACCEL_USEC, then at full speed */
-#define DISC_SPIN_UP_USEC        1500000
-#define DISC_SPIN_ACCEL_USEC     1000000
+#define DISC_SPIN_UP_USEC        2500000
+#define DISC_SPIN_ACCEL_USEC     1500000
 /* Full speed: two turns a second (a literal drive speed would only
  * look still or flicker) */
 #define DISC_SPIN_FULL_SPEED     (2.0f * 2.0f * (float)M_PI)
@@ -61,6 +61,10 @@ static struct
    float icon_x, icon_y, icon_w, icon_h;
    unsigned video_width, video_height;
    bool icon_valid;
+
+   /* Where the disc is in its picture (0..1, from the top left): a
+    * scan is rarely centred, square or quite round */
+   float disc_u0, disc_v0, disc_u1, disc_v1;
 
    /* The held launch */
    menu_disc_spin_launch_t launch;
@@ -166,6 +170,60 @@ static bool disc_spin_dir_is_disc_system(const char *dir)
    return slot->disc;
 }
 
+/* The disc's box in its picture: everything that isn't see-through.
+ * The threshold is low so a disc's faint clear rim counts too. */
+static void disc_spin_find_disc(const char *path)
+{
+   struct texture_image img;
+   unsigned x, y;
+   unsigned x0 = 0xffffffffu, y0 = 0xffffffffu, x1 = 0, y1 = 0;
+
+   /* Whole picture, just inside its edge, if it can't be read */
+   disc_spin_st.disc_u0 = 0.005f;
+   disc_spin_st.disc_v0 = 0.005f;
+   disc_spin_st.disc_u1 = 0.995f;
+   disc_spin_st.disc_v1 = 0.995f;
+
+   memset(&img, 0, sizeof(img));
+   img.supports_rgba = true;
+   if (!image_texture_load(&img, path))
+      return;
+   if (img.pixels && img.width > 8 && img.height > 8)
+   {
+      for (y = 0; y < img.height; y++)
+      {
+         const uint32_t *row = img.pixels + (size_t)y * img.width;
+         for (x = 0; x < img.width; x++)
+         {
+            /* The alpha byte is the high byte of the word in either order */
+            if ((row[x] >> 24) > 8)
+            {
+               if (x < x0) x0 = x;
+               if (x > x1) x1 = x;
+               if (y < y0) y0 = y;
+               if (y > y1) y1 = y;
+            }
+         }
+      }
+      if (x1 > x0 + 8 && y1 > y0 + 8)
+      {
+         disc_spin_st.disc_u0 = (float)x0 / (float)img.width;
+         disc_spin_st.disc_v0 = (float)y0 / (float)img.height;
+         disc_spin_st.disc_u1 = (float)(x1 + 1) / (float)img.width;
+         disc_spin_st.disc_v1 = (float)(y1 + 1) / (float)img.height;
+      }
+   }
+   image_texture_free(&img);
+}
+
+void menu_disc_spin_disc_box(float *u0, float *v0, float *u1, float *v1)
+{
+   *u0 = disc_spin_st.disc_u0;
+   *v0 = disc_spin_st.disc_v0;
+   *u1 = disc_spin_st.disc_u1;
+   *v1 = disc_spin_st.disc_v1;
+}
+
 bool menu_disc_spin_begin(menu_disc_spin_launch_t launch,
       const char *path, const char *label, unsigned type,
       size_t idx, size_t entry_idx)
@@ -195,6 +253,8 @@ bool menu_disc_spin_begin(menu_disc_spin_launch_t launch,
    }
    if (!disc_spin_dir_is_disc_system(dir))
       return false;
+
+   disc_spin_find_disc(disc_spin_st.icon_path);
 
    disc_spin_st.launch      = launch;
    strlcpy(disc_spin_st.path,  path  ? path  : "", sizeof(disc_spin_st.path));
@@ -251,9 +311,15 @@ bool menu_disc_spin_iterate(retro_time_t now)
    /* Keep it turning while the load blocks the menu */
    if (disc_spin_st.icon_valid)
    {
+      /* Just the disc, from its box in the picture */
+      float u0 = disc_spin_st.disc_u0, v0 = disc_spin_st.disc_v0;
+      float u1 = disc_spin_st.disc_u1, v1 = disc_spin_st.disc_v1;
       cocoa_disc_spin_overlay_show(disc_spin_st.icon_path,
-            disc_spin_st.icon_x, disc_spin_st.icon_y,
-            disc_spin_st.icon_w, disc_spin_st.icon_h,
+            u0, v0, u1, v1,
+            disc_spin_st.icon_x + u0 * disc_spin_st.icon_w,
+            disc_spin_st.icon_y + v0 * disc_spin_st.icon_h,
+            (u1 - u0) * disc_spin_st.icon_w,
+            (v1 - v0) * disc_spin_st.icon_h,
             disc_spin_st.video_width, disc_spin_st.video_height,
             menu_disc_spin_angle(now), DISC_SPIN_FULL_SPEED);
       disc_spin_st.overlay = true;
