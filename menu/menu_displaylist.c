@@ -4289,6 +4289,15 @@ static int menu_displaylist_parse_load_content_settings(
                MENU_SETTING_ACTION, 0, 0, NULL))
             count++;
 
+      /* ...and its strategy guide */
+      if (menu_guide_available())
+         if (menu_entries_append(list,
+               msg_hash_to_str(MENU_ENUM_LABEL_VALUE_GAME_GUIDE),
+               MENU_ENUM_LABEL_GAME_GUIDE_STR,
+               MENU_ENUM_LABEL_GAME_GUIDE,
+               MENU_SETTING_ACTION, 0, 0, NULL))
+            count++;
+
       /* Note: Entry type depends on whether quick menu
        * was accessed via a playlist ('horizontal content')
        * or the main menu
@@ -4754,6 +4763,14 @@ static int menu_displaylist_parse_horizontal_content_actions(
                msg_hash_to_str(MENU_ENUM_LABEL_VALUE_GAME_MANUAL),
                MENU_ENUM_LABEL_GAME_MANUAL_STR,
                MENU_ENUM_LABEL_GAME_MANUAL,
+               MENU_SETTING_ACTION, 0, idx, NULL);
+
+      /* ...and its strategy guide */
+      if (menu_guide_available())
+         menu_entries_append(list,
+               msg_hash_to_str(MENU_ENUM_LABEL_VALUE_GAME_GUIDE),
+               MENU_ENUM_LABEL_GAME_GUIDE_STR,
+               MENU_ENUM_LABEL_GAME_GUIDE,
                MENU_SETTING_ACTION, 0, idx, NULL);
 
       if (settings->bools.quick_menu_show_save_load_state)
