@@ -37,6 +37,10 @@ bool menu_manual_available(void);
 /* Opens the viewer on that game's manual(s) */
 bool menu_manual_open(void);
 
+/* The same for strategy guides: <thumbnails>/<system>/Named_Guides/<game>.pdf */
+bool menu_guide_available(void);
+bool menu_guide_open(void);
+
 bool menu_manual_is_active(void);
 
 /* Closes the viewer and frees its pages (main thread, video context up) */

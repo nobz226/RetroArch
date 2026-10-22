@@ -24205,6 +24205,14 @@ MSG_HASH(
    "Read this game's instruction manual."
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_GAME_GUIDE,
+   "Strategy Guide"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_GAME_GUIDE,
+   "Read this game's strategy guide."
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_VALUE_DELETE_ENTRY,
    "Remove"
    )

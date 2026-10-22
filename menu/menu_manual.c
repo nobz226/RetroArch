@@ -88,10 +88,13 @@ static struct
    unsigned generation;  /* bumped on close: late renders are dropped */
    float scroll;         /* 0 top .. 1 bottom, MANUAL_ZOOM_WIDTH */
    bool active;
+   bool guide;           /* showing strategy guides, not manuals */
 } manual_st;
 
-/* Where this system's manuals are, the same folder rules as its artwork */
-static bool manual_find_docs(char docs[][PATH_MAX_LENGTH], unsigned max,
+/* Where this system's manuals (Named_Manuals) or strategy guides
+ * (Named_Guides) are, the same folder rules as its artwork */
+static bool manual_find_docs(const char *folder,
+      char docs[][PATH_MAX_LENGTH], unsigned max,
       unsigned *count, char *title, size_t title_len)
 {
    char dir[PATH_MAX_LENGTH];
@@ -129,7 +132,7 @@ static bool manual_find_docs(char docs[][PATH_MAX_LENGTH], unsigned max,
 
    fill_pathname_join_special(path, settings->paths.directory_thumbnails,
          system_name, sizeof(path));
-   fill_pathname_join_special(dir, path, "Named_Manuals", sizeof(dir));
+   fill_pathname_join_special(dir, path, folder, sizeof(dir));
    if (!path_is_directory(dir))
       return false;
 
@@ -178,12 +181,23 @@ static bool manual_find_docs(char docs[][PATH_MAX_LENGTH], unsigned max,
    return true;
 }
 
-bool menu_manual_available(void)
+static bool manual_docs_available(const char *folder)
 {
    char docs[1][PATH_MAX_LENGTH];
    char title[NAME_MAX_LENGTH];
    unsigned count = 0;
-   return manual_find_docs(docs, 1, &count, title, sizeof(title)) && count > 0;
+   return manual_find_docs(folder, docs, 1, &count, title, sizeof(title))
+      && count > 0;
+}
+
+bool menu_manual_available(void)
+{
+   return manual_docs_available("Named_Manuals");
+}
+
+bool menu_guide_available(void)
+{
+   return manual_docs_available("Named_Guides");
 }
 
 bool menu_manual_is_active(void)
@@ -202,12 +216,14 @@ static void manual_pages_path(char *s, size_t len)
 
 static void manual_page_key(char *s, size_t len, const char *doc)
 {
-   /* djb2 of the file name: keys can't hold spaces or quotes */
+   /* djb2 of the file name: keys can't hold spaces or quotes. A guide
+    * has the same file name as its game's manual, so it gets its own key */
    uint32_t hash     = 5381;
    const char *name  = path_basename(doc);
    while (name && *name)
       hash = ((hash << 5) + hash) + (unsigned char)*name++;
-   snprintf(s, len, "manual_page_%08x", (unsigned)hash);
+   snprintf(s, len, manual_st.guide ? "guide_page_%08x" : "manual_page_%08x",
+         (unsigned)hash);
 }
 
 static unsigned manual_load_page(const char *doc)
@@ -452,17 +468,18 @@ static void manual_request(unsigned page)
 static void manual_request(unsigned page) { (void)page; }
 #endif
 
-bool menu_manual_open(void)
+static bool manual_open_docs(const char *folder, bool guide)
 {
    unsigned i;
    char docs[MANUAL_MAX_DOCS][PATH_MAX_LENGTH];
    char title[NAME_MAX_LENGTH];
    unsigned count = 0;
 
-   if (!manual_find_docs(docs, MANUAL_MAX_DOCS, &count, title, sizeof(title)))
+   if (!manual_find_docs(folder, docs, MANUAL_MAX_DOCS, &count, title, sizeof(title)))
       return false;
 
    menu_manual_close();
+   manual_st.guide     = guide;
    for (i = 0; i < count; i++)
    {
       strlcpy(manual_st.docs[i], docs[i], sizeof(manual_st.docs[i]));
@@ -484,11 +501,21 @@ bool menu_manual_open(void)
    if (manual_st.page >= manual_st.page_counts[0])
       manual_st.page   = 0;
    manual_st.active    = true;
-   RARCH_LOG("[Manual] Opened \"%s\" (%u page(s), %u manual(s)).\n",
+   RARCH_LOG("[Manual] Opened \"%s\" (%u page(s), %u document(s)).\n",
          docs[0], manual_st.page_counts[0], count);
    /* The first page is asked for by the first frame, which knows the
     * screen size */
    return true;
+}
+
+bool menu_manual_open(void)
+{
+   return manual_open_docs("Named_Manuals", false);
+}
+
+bool menu_guide_open(void)
+{
+   return manual_open_docs("Named_Guides", true);
 }
 
 void menu_manual_close(void)
@@ -740,7 +767,9 @@ void menu_manual_frame(video_frame_info_t *video_info)
          ? path_basename(manual_st.docs[manual_st.doc]) : manual_st.title;
       const char *updown = (manual_st.zoom == MANUAL_ZOOM_WIDTH)
          ? "   Up/Down: scroll"
-         : (manual_st.doc_count > 1 ? "   Up/Down: other manuals" : "");
+         : (manual_st.doc_count > 1
+               ? (manual_st.guide ? "   Up/Down: other guides" : "   Up/Down: other manuals")
+               : "");
       len = snprintf(msg, sizeof(msg),
             "%s  -  page %u of %u%s      Left/Right: page   L/R: 5 pages   Y: zoom%s   Back: close",
             name ? name : "",

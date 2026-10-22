@@ -2956,6 +2956,13 @@ static int action_ok_game_manual(const char *path,
    return 0;
 }
 
+static int action_ok_game_guide(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   menu_guide_open();
+   return 0;
+}
+
 static int action_ok_playlist_entry_collection(const char *path,
       const char *label, unsigned type, size_t idx, size_t entry_idx)
 {
@@ -9680,6 +9687,7 @@ static int menu_cbs_init_bind_ok_compare_label(menu_file_list_cbs_t *cbs,
          {MENU_ENUM_LABEL_TAKE_SCREENSHOT,                     action_ok_screenshot},
          {MENU_ENUM_LABEL_RENAME_ENTRY,                        action_ok_rename_entry},
          {MENU_ENUM_LABEL_GAME_MANUAL,                         action_ok_game_manual},
+         {MENU_ENUM_LABEL_GAME_GUIDE,                          action_ok_game_guide},
          {MENU_ENUM_LABEL_DELETE_ENTRY,                        action_ok_delete_entry},
          {MENU_ENUM_LABEL_MENU_DISABLE_KIOSK_MODE,             action_ok_disable_kiosk_mode},
          {MENU_ENUM_LABEL_XMB_MAIN_MENU_ENABLE_SETTINGS,       action_ok_enable_settings},
